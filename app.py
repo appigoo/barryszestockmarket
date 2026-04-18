@@ -490,7 +490,7 @@ def inject_css():
     .stApp {{
         background: {th['bg']} !important;
         font-family: 'Noto Sans HK', 'Inter', sans-serif !important;
-        font-size: {fs}px;
+        font-size: {fs}px !important;
     }}
 
     .block-container {{
@@ -499,9 +499,79 @@ def inject_css():
         max-width: 100% !important;
     }}
 
-    body, p, div, span, label {{
+    /* ── FONT SIZE — target every possible Streamlit text element ── */
+    html, body {{ font-size: {fs}px !important; }}
+
+    /* General text */
+    p, span, div, label, a, li, td, th, button,
+    input, textarea, select, option {{
         font-family: 'Noto Sans HK', 'Inter', sans-serif !important;
-        color: {th['text1']};
+    }}
+    p, li, td, th {{ font-size: {fs}px !important; color: {th['text1']}; }}
+
+    /* Streamlit markdown */
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] span,
+    [data-testid="stMarkdownContainer"] li,
+    .stMarkdown p, .stMarkdown span {{
+        font-size: {fs}px !important;
+    }}
+
+    /* Streamlit widgets labels */
+    .stTextInput label, .stSelectbox label,
+    .stTextArea label, .stNumberInput label,
+    .stDateInput label, .stSlider label,
+    .stRadio label, .stCheckbox label,
+    .stMultiselect label {{
+        font-size: calc({fs}px * 0.9) !important;
+        color: {th['text2']} !important;
+    }}
+
+    /* Input fields */
+    .stTextInput input, .stNumberInput input,
+    .stTextArea textarea, .stDateInput input {{
+        font-size: {fs}px !important;
+    }}
+
+    /* Buttons */
+    .stButton > button, .stFormSubmitButton > button {{
+        font-size: {fs}px !important;
+    }}
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab"] {{
+        font-size: {fs}px !important;
+    }}
+    .stTabs [data-baseweb="tab"] p,
+    .stTabs [data-baseweb="tab"] span {{
+        font-size: {fs}px !important;
+    }}
+
+    /* Metrics */
+    [data-testid="stMetricValue"] {{
+        font-size: calc({fs}px * 1.9) !important;
+    }}
+    [data-testid="stMetricLabel"] {{
+        font-size: calc({fs}px * 0.85) !important;
+        color: {th['text3']} !important;
+    }}
+    [data-testid="stMetricDelta"] {{
+        font-size: {fs}px !important;
+    }}
+
+    /* Selectbox dropdown */
+    [data-testid="stSelectbox"] div[role="combobox"],
+    [data-testid="stSelectbox"] div[class*="ValueContainer"] {{
+        font-size: {fs}px !important;
+    }}
+
+    /* Sidebar text */
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] div,
+    section[data-testid="stSidebar"] button {{
+        font-size: calc({fs}px * 0.9) !important;
     }}
 
     /* ───── LOGIN PAGE ───── */
@@ -808,6 +878,32 @@ def inject_css():
 # ═══════════════════════════════════════════════════════════════════
 #   USER MANAGEMENT (Google Sheets + bcrypt)
 # ═══════════════════════════════════════════════════════════════════
+
+def custom_expander(label: str, key: str, default_open: bool = False):
+    """Replacement for st.expander that avoids the _arrow keyboard icon bug"""
+    th = get_theme()
+    is_open = st.session_state.get(f"exp_{key}", default_open)
+    arrow = "▼" if is_open else "▶"
+    btn_style = (
+        f"background:{th['card2']};border:1px solid {th['border']};"
+        f"border-radius:9px;padding:10px 14px;cursor:pointer;"
+        f"display:flex;align-items:center;gap:8px;width:100%;"
+        f"font-size:14px;font-weight:600;color:{th['text1']};"
+        f"margin-bottom:{'0' if is_open else '8px'}"
+    )
+    st.markdown(
+        f'<div style="{btn_style}">'
+        f'<span style="font-size:12px;color:{th["text3"]}">{arrow}</span>'
+        f'{label}</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button(label, key=f"exp_btn_{key}", label_visibility="collapsed",
+                 use_container_width=True):
+        st.session_state[f"exp_{key}"] = not is_open
+        st.rerun()
+    return is_open
+
+
 @st.cache_resource
 def get_gsheet():
     """Connect to Google Sheets."""
@@ -2399,26 +2495,36 @@ def tab_watchlist():
 
     # Saved portfolios (Pro)
     if is_pro():
-        with st.expander("組合儲存"):
-            portfolios = st.session_state.get("portfolios", {})
-            for pname, ptk in portfolios.items():
-                pc1, pc2 = st.columns([4, 1])
-                with pc1:
-                    st.markdown(f'<span style="font-size:13px;color:{th["text1"]}">📁 <b>{pname}</b>: <span style="color:{th["text3"]}">{ptk}</span></span>', unsafe_allow_html=True)
-                with pc2:
-                    if st.button("載入", key=f"load_{pname}"):
-                        st.session_state["wl_tickers"] = ptk; st.rerun()
-            pn1, pn2 = st.columns([3, 1])
-            with pn1:
-                new_pname = st.text_input("組合名稱", key="new_pname", placeholder="如：科技組合")
-            with pn2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("💾 儲存", key="save_pf"):
-                    if new_pname and tickers_raw:
-                        portfolios[new_pname] = ", ".join(tickers_raw)
-                        st.session_state["portfolios"] = portfolios
-                        st.success(f"已儲存「{new_pname}」")
-
+        # --- custom expander: 組合儲存 ---
+        _exp_key_1 = "exp_0"
+        if "_exp_state" not in st.session_state:
+            st.session_state["_exp_state"] = {}
+        _exp_open_1 = st.session_state["_exp_state"].get("exp_0", False)
+        _exp_arrow_1 = "▼" if _exp_open_1 else "▶"
+        if st.button(f"{_exp_arrow_1}  組合儲存", key="exp_0_btn", use_container_width=True):
+            st.session_state["_exp_state"]["exp_0"] = not _exp_open_1
+            st.rerun()
+        if _exp_open_1:
+            with st.container():
+                portfolios = st.session_state.get("portfolios", {})
+                for pname, ptk in portfolios.items():
+                    pc1, pc2 = st.columns([4, 1])
+                    with pc1:
+                        st.markdown(f'<span style="font-size:13px;color:{th["text1"]}">📁 <b>{pname}</b>: <span style="color:{th["text3"]}">{ptk}</span></span>', unsafe_allow_html=True)
+                    with pc2:
+                        if st.button("載入", key=f"load_{pname}"):
+                            st.session_state["wl_tickers"] = ptk; st.rerun()
+                pn1, pn2 = st.columns([3, 1])
+                with pn1:
+                    new_pname = st.text_input("組合名稱", key="new_pname", placeholder="如：科技組合")
+                with pn2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("💾 儲存", key="save_pf"):
+                        if new_pname and tickers_raw:
+                            portfolios[new_pname] = ", ".join(tickers_raw)
+                            st.session_state["portfolios"] = portfolios
+                            st.success(f"已儲存「{new_pname}」")
+                
     st.markdown("<br>", unsafe_allow_html=True)
 
     # Fetch
@@ -2711,17 +2817,27 @@ def tab_portfolio():
 
     with ptabs[0]:
         positions = st.session_state.get("positions", [])
-        with st.expander("新增持倉"):
-            pc1,pc2,pc3,pc4 = st.columns(4)
-            with pc1: new_tk  = st.text_input("代碼", key="pos_tk", placeholder="TSLA")
-            with pc2: new_qty = st.number_input("股數", min_value=1, value=100, key="pos_qty")
-            with pc3: new_cost = st.number_input("成本($)", min_value=0.01, value=200.0, step=0.01, key="pos_cost")
-            with pc4: new_dt = st.date_input("日期", key="pos_dt")
-            if st.button("新增", key="add_pos"):
-                if new_tk.strip():
-                    if "positions" not in st.session_state: st.session_state["positions"] = []
-                    st.session_state["positions"].append({"ticker":new_tk.strip().upper(),"qty":new_qty,"cost":new_cost,"date":str(new_dt)})
-                    st.rerun()
+        # --- custom expander: 新增持倉 ---
+        _exp_key_2 = "exp_1"
+        if "_exp_state" not in st.session_state:
+            st.session_state["_exp_state"] = {}
+        _exp_open_2 = st.session_state["_exp_state"].get("exp_1", False)
+        _exp_arrow_2 = "▼" if _exp_open_2 else "▶"
+        if st.button(f"{_exp_arrow_2}  新增持倉", key="exp_1_btn", use_container_width=True):
+            st.session_state["_exp_state"]["exp_1"] = not _exp_open_2
+            st.rerun()
+        if _exp_open_2:
+            with st.container():
+                pc1,pc2,pc3,pc4 = st.columns(4)
+                with pc1: new_tk  = st.text_input("代碼", key="pos_tk", placeholder="TSLA")
+                with pc2: new_qty = st.number_input("股數", min_value=1, value=100, key="pos_qty")
+                with pc3: new_cost = st.number_input("成本($)", min_value=0.01, value=200.0, step=0.01, key="pos_cost")
+                with pc4: new_dt = st.date_input("日期", key="pos_dt")
+                if st.button("新增", key="add_pos"):
+                    if new_tk.strip():
+                        if "positions" not in st.session_state: st.session_state["positions"] = []
+                        st.session_state["positions"].append({"ticker":new_tk.strip().upper(),"qty":new_qty,"cost":new_cost,"date":str(new_dt)})
+                        st.rerun()
         if positions:
             rows2 = ""; total_v = total_c = 0
             for pos in positions:
@@ -2771,26 +2887,36 @@ def tab_journal():
     jtabs = st.tabs(["📝 記錄交易", "📊 勝率統計", "🤖 AI 教練"])
 
     with jtabs[0]:
-        with st.expander("記錄新交易", expanded=True):
-            j1,j2,j3 = st.columns(3)
-            with j1:
-                jtk = st.text_input("代碼", key="j_tk", placeholder="TSLA")
-                jdir = st.radio("方向", ["做多 Long","做空 Short"], key="j_dir")
-            with j2:
-                jentry = st.number_input("入場價($)", value=200.0, step=0.01, key="j_entry")
-                jexit  = st.number_input("出場價($)", value=220.0, step=0.01, key="j_exit")
-            with j3:
-                jqty = st.number_input("股數", min_value=1, value=100, key="j_qty")
-                jemo = st.selectbox("情緒", ["😌 冷靜","😰 緊張","😤 貪婪","😱 恐懼"], key="j_emo")
-            j_in  = st.text_input("入場理由", key="j_in",  placeholder="如：EMA金叉+RSI<60")
-            j_out = st.text_input("出場理由", key="j_out", placeholder="如：達到目標位")
-            if st.button("✅ 記錄", key="add_trade"):
-                if jtk.strip():
-                    mult = 1 if "Long" in jdir else -1
-                    pnl = (jexit-jentry)*jqty*mult
-                    if "journal" not in st.session_state: st.session_state["journal"] = []
-                    st.session_state["journal"].append({"date":datetime.now().strftime("%Y-%m-%d"),"ticker":jtk.strip().upper(),"direction":jdir,"entry":jentry,"exit":jexit,"qty":jqty,"pnl":pnl,"emotion":jemo,"reason_in":j_in,"reason_out":j_out})
-                    st.success(f"已記錄 {jtk.upper()} · 盈虧 ${pnl:+,.2f}")
+        # --- custom expander: 記錄新交易 ---
+        _exp_key_3 = "exp_2"
+        if "_exp_state" not in st.session_state:
+            st.session_state["_exp_state"] = {}
+        _exp_open_3 = st.session_state["_exp_state"].get("exp_2", True)
+        _exp_arrow_3 = "▼" if _exp_open_3 else "▶"
+        if st.button(f"{_exp_arrow_3}  記錄新交易", key="exp_2_btn", use_container_width=True):
+            st.session_state["_exp_state"]["exp_2"] = not _exp_open_3
+            st.rerun()
+        if _exp_open_3:
+            with st.container():
+                j1,j2,j3 = st.columns(3)
+                with j1:
+                    jtk = st.text_input("代碼", key="j_tk", placeholder="TSLA")
+                    jdir = st.radio("方向", ["做多 Long","做空 Short"], key="j_dir")
+                with j2:
+                    jentry = st.number_input("入場價($)", value=200.0, step=0.01, key="j_entry")
+                    jexit  = st.number_input("出場價($)", value=220.0, step=0.01, key="j_exit")
+                with j3:
+                    jqty = st.number_input("股數", min_value=1, value=100, key="j_qty")
+                    jemo = st.selectbox("情緒", ["😌 冷靜","😰 緊張","😤 貪婪","😱 恐懼"], key="j_emo")
+                j_in  = st.text_input("入場理由", key="j_in",  placeholder="如：EMA金叉+RSI<60")
+                j_out = st.text_input("出場理由", key="j_out", placeholder="如：達到目標位")
+                if st.button("✅ 記錄", key="add_trade"):
+                    if jtk.strip():
+                        mult = 1 if "Long" in jdir else -1
+                        pnl = (jexit-jentry)*jqty*mult
+                        if "journal" not in st.session_state: st.session_state["journal"] = []
+                        st.session_state["journal"].append({"date":datetime.now().strftime("%Y-%m-%d"),"ticker":jtk.strip().upper(),"direction":jdir,"entry":jentry,"exit":jexit,"qty":jqty,"pnl":pnl,"emotion":jemo,"reason_in":j_in,"reason_out":j_out})
+                        st.success(f"已記錄 {jtk.upper()} · 盈虧 ${pnl:+,.2f}")
         journal = st.session_state.get("journal", [])
         if journal:
             jrows = "".join(f'<tr><td>{x["date"]}</td><td style="font-weight:700">{x["ticker"]}</td><td style="font-size:11px">{x["direction"]}</td><td style="font-family:Inter">${x["entry"]:.2f}</td><td style="font-family:Inter">${x["exit"]:.2f}</td><td style="font-family:Inter">{x["qty"]:,}</td><td><span class="{"cell-up" if x["pnl"]>=0 else "cell-dn"}">${x["pnl"]:+,.0f}</span></td><td style="font-size:12px">{x["emotion"]}</td></tr>' for x in reversed(journal[-20:]))
@@ -2893,24 +3019,44 @@ def tab_settings():
 
     s1, s2 = st.columns(2, gap="medium")
     with s1:
-        with st.expander("Telegram 推送設定"):
-            tg_id_s = st.text_input("你的 Telegram Chat ID", key="tg_id_s", placeholder="123456789", help="Telegram 搜尋 @userinfobot 獲取")
-            if st.button("🔔 測試推送", key="test_tg_s"):
-                if tg_id_s:
-                    ok = send_telegram_msg(tg_id_s, f"✅ MarketIQ 推送測試成功！\n👤 {st.session_state.get('username','')}")
-                    st.success("✅ 推送成功！" if ok else "❌ 推送失敗")
-
-        with st.expander("價格提示設定"):
-            wl_set = [s.strip().upper() for s in st.session_state.get("wl_tickers","TSLA,AAPL").split(",") if s.strip()][:5]
-            alerts = st.session_state.get("price_alerts", {})
-            for tk in wl_set:
-                ac1, ac2 = st.columns(2)
-                with ac1: ab = st.number_input(f"{tk} 目標價↑($)", value=float(alerts.get(tk,{}).get("above",0)), step=1.0, key=f"ab_{tk}", min_value=0.0)
-                with ac2: bl = st.number_input(f"{tk} 止損價↓($)", value=float(alerts.get(tk,{}).get("below",0)), step=1.0, key=f"bl_{tk}", min_value=0.0)
-            if st.button("💾 儲存提示", key="save_alerts_s"):
-                new_a = {tk:{"above":st.session_state.get(f"ab_{tk}",0),"below":st.session_state.get(f"bl_{tk}",0)} for tk in wl_set if st.session_state.get(f"ab_{tk}",0)>0 or st.session_state.get(f"bl_{tk}",0)>0}
-                st.session_state["price_alerts"] = new_a; st.success("已儲存")
-
+        # --- custom expander: Telegram 推送設定 ---
+        _exp_key_4 = "exp_3"
+        if "_exp_state" not in st.session_state:
+            st.session_state["_exp_state"] = {}
+        _exp_open_4 = st.session_state["_exp_state"].get("exp_3", False)
+        _exp_arrow_4 = "▼" if _exp_open_4 else "▶"
+        if st.button(f"{_exp_arrow_4}  Telegram 推送設定", key="exp_3_btn", use_container_width=True):
+            st.session_state["_exp_state"]["exp_3"] = not _exp_open_4
+            st.rerun()
+        if _exp_open_4:
+            with st.container():
+                tg_id_s = st.text_input("你的 Telegram Chat ID", key="tg_id_s", placeholder="123456789", help="Telegram 搜尋 @userinfobot 獲取")
+                if st.button("🔔 測試推送", key="test_tg_s"):
+                    if tg_id_s:
+                        ok = send_telegram_msg(tg_id_s, f"✅ MarketIQ 推送測試成功！\n👤 {st.session_state.get('username','')}")
+                        st.success("✅ 推送成功！" if ok else "❌ 推送失敗")
+                
+        # --- custom expander: 價格提示設定 ---
+        _exp_key_5 = "exp_4"
+        if "_exp_state" not in st.session_state:
+            st.session_state["_exp_state"] = {}
+        _exp_open_5 = st.session_state["_exp_state"].get("exp_4", False)
+        _exp_arrow_5 = "▼" if _exp_open_5 else "▶"
+        if st.button(f"{_exp_arrow_5}  價格提示設定", key="exp_4_btn", use_container_width=True):
+            st.session_state["_exp_state"]["exp_4"] = not _exp_open_5
+            st.rerun()
+        if _exp_open_5:
+            with st.container():
+                wl_set = [s.strip().upper() for s in st.session_state.get("wl_tickers","TSLA,AAPL").split(",") if s.strip()][:5]
+                alerts = st.session_state.get("price_alerts", {})
+                for tk in wl_set:
+                    ac1, ac2 = st.columns(2)
+                    with ac1: ab = st.number_input(f"{tk} 目標價↑($)", value=float(alerts.get(tk,{}).get("above",0)), step=1.0, key=f"ab_{tk}", min_value=0.0)
+                    with ac2: bl = st.number_input(f"{tk} 止損價↓($)", value=float(alerts.get(tk,{}).get("below",0)), step=1.0, key=f"bl_{tk}", min_value=0.0)
+                if st.button("💾 儲存提示", key="save_alerts_s"):
+                    new_a = {tk:{"above":st.session_state.get(f"ab_{tk}",0),"below":st.session_state.get(f"bl_{tk}",0)} for tk in wl_set if st.session_state.get(f"ab_{tk}",0)>0 or st.session_state.get(f"bl_{tk}",0)>0}
+                    st.session_state["price_alerts"] = new_a; st.success("已儲存")
+                
     with s2:
         role_v = st.session_state.get("role","free")
         exp_str = st.session_state.get("expiry_date","永久")
@@ -2946,8 +3092,18 @@ def tab_admin():
     sheet = get_gsheet()
     if sheet is None:
         st.warning("Google Sheets 未連接，顯示本地測試數據")
-        with st.expander("連接診斷", expanded=True):
-            debug_gsheet_connection()
+        # --- custom expander: 連接診斷 ---
+        _exp_key_6 = "exp_5"
+        if "_exp_state" not in st.session_state:
+            st.session_state["_exp_state"] = {}
+        _exp_open_6 = st.session_state["_exp_state"].get("exp_5", True)
+        _exp_arrow_6 = "▼" if _exp_open_6 else "▶"
+        if st.button(f"{_exp_arrow_6}  連接診斷", key="exp_5_btn", use_container_width=True):
+            st.session_state["_exp_state"]["exp_5"] = not _exp_open_6
+            st.rerun()
+        if _exp_open_6:
+            with st.container():
+                debug_gsheet_connection()
         users_list = [{"username":k,"role":v["role"],"expiry_date":v.get("expiry_date","—"),"status":v.get("status","active"),"region":v.get("region","UK"),"ai_calls_today":0} for k,v in FALLBACK_USERS.items()]
     else:
         try: users_list = sheet.get_all_records()
@@ -2959,58 +3115,78 @@ def tab_admin():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    with st.expander("新增用戶"):
-        ua1,ua2,ua3,ua4,ua5,ua6 = st.columns(6)
-        with ua1: nu = st.text_input("用戶名", key="nu_adm")
-        with ua2: np2 = st.text_input("密碼", type="password", key="np_adm")
-        with ua3: nr = st.selectbox("角色", ["free","pro","admin"], key="nr_adm")
-        with ua4: nd = st.number_input("天數(0=永久)", 0, 3650, 14, key="nd_adm")
-        with ua5: nreg = st.selectbox("地區", ["HK","CN","UK","US"], key="nreg_adm")
-        with ua6: nlang = st.selectbox("語言", ["zh-hant","zh-hans","en"], key="nlang_adm")
-        if st.button("新增用戶", key="do_add_adm"):
-            if nu and np2 and sheet:
-                from datetime import timedelta
-                exp = "永久" if nd==0 else (datetime.now().date()+timedelta(days=nd)).isoformat()
-                pw_hash = bcrypt.hashpw(np2.encode(), bcrypt.gensalt()).decode()
-                try:
-                    sheet.append_row([nu,pw_hash,nr,exp,nreg,nlang,"dark","active",datetime.now().date().isoformat(),"",0,"","","","{}","{}"])
-                    st.success(f"已新增用戶 {nu}")
-                except Exception as e: st.error(f"新增失敗: {e}")
-            elif not sheet: st.warning("需要 Google Sheets 連接才能新增用戶")
-
+    # --- custom expander: 新增用戶 ---
+    _exp_key_7 = "exp_6"
+    if "_exp_state" not in st.session_state:
+        st.session_state["_exp_state"] = {}
+    _exp_open_7 = st.session_state["_exp_state"].get("exp_6", False)
+    _exp_arrow_7 = "▼" if _exp_open_7 else "▶"
+    if st.button(f"{_exp_arrow_7}  新增用戶", key="exp_6_btn", use_container_width=True):
+        st.session_state["_exp_state"]["exp_6"] = not _exp_open_7
+        st.rerun()
+    if _exp_open_7:
+        with st.container():
+            ua1,ua2,ua3,ua4,ua5,ua6 = st.columns(6)
+            with ua1: nu = st.text_input("用戶名", key="nu_adm")
+            with ua2: np2 = st.text_input("密碼", type="password", key="np_adm")
+            with ua3: nr = st.selectbox("角色", ["free","pro","admin"], key="nr_adm")
+            with ua4: nd = st.number_input("天數(0=永久)", 0, 3650, 14, key="nd_adm")
+            with ua5: nreg = st.selectbox("地區", ["HK","CN","UK","US"], key="nreg_adm")
+            with ua6: nlang = st.selectbox("語言", ["zh-hant","zh-hans","en"], key="nlang_adm")
+            if st.button("新增用戶", key="do_add_adm"):
+                if nu and np2 and sheet:
+                    from datetime import timedelta
+                    exp = "永久" if nd==0 else (datetime.now().date()+timedelta(days=nd)).isoformat()
+                    pw_hash = bcrypt.hashpw(np2.encode(), bcrypt.gensalt()).decode()
+                    try:
+                        sheet.append_row([nu,pw_hash,nr,exp,nreg,nlang,"dark","active",datetime.now().date().isoformat(),"",0,"","","","{}","{}"])
+                        st.success(f"已新增用戶 {nu}")
+                    except Exception as e: st.error(f"新增失敗: {e}")
+                elif not sheet: st.warning("需要 Google Sheets 連接才能新增用戶")
+            
     st.markdown(sec_title("用戶列表"), unsafe_allow_html=True)
     if users_list:
         urows = "".join(f'<tr><td style="font-weight:600">{u.get("username","")}</td><td style="color:{"#f0a030" if u.get("role")=="admin" else th["green"] if u.get("role")=="pro" else th["text3"]};font-weight:600">{u.get("role","").upper()}</td><td>{u.get("expiry_date","—")}</td><td>{u.get("region","—")}</td><td style="font-family:Inter">{u.get("ai_calls_today",0)}</td><td style="color:{th["green"] if u.get("status","active")=="active" else th["red"]}">{u.get("status","active")}</td></tr>' for u in users_list)
         st.markdown(f'<div class="ds-card" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:2px solid {th["border"]}">'+"".join(f'<th style="padding:7px 10px;font-size:10px;color:{th["text3"]}">{h}</th>' for h in ["用戶名","角色","到期日","地區","今日AI","狀態"])+f'</tr></thead><tbody>{urows}</tbody></table></div>', unsafe_allow_html=True)
 
-    with st.expander("快速編輯用戶"):
-        unames = [u.get("username","") for u in users_list]
-        if unames:
-            eu = st.selectbox("選擇用戶", unames, key="eu_adm")
-            ec1,ec2,ec3 = st.columns(3)
-            with ec1:
-                new_role_adm = st.selectbox("新角色", ["free","pro","admin"], key="new_role_adm")
-                if st.button("更新角色", key="upd_role_adm") and sheet:
-                    try:
-                        cell=sheet.find(eu); headers=sheet.row_values(1); col=headers.index("role")+1
-                        sheet.update_cell(cell.row,col,new_role_adm); st.success(f"已更新 {eu} 角色")
-                    except Exception as e: st.error(str(e))
-            with ec2:
-                new_exp_adm = st.text_input("新到期日", key="new_exp_adm", placeholder="YYYY-MM-DD 或 永久")
-                if st.button("更新到期日", key="upd_exp_adm") and sheet:
-                    try:
-                        cell=sheet.find(eu); headers=sheet.row_values(1); col=headers.index("expiry_date")+1
-                        sheet.update_cell(cell.row,col,new_exp_adm); st.success(f"已更新 {eu} 到期日")
-                    except Exception as e: st.error(str(e))
-            with ec3:
-                new_st_adm = st.selectbox("帳號狀態", ["active","disabled"], key="new_st_adm")
-                if st.button("更新狀態", key="upd_st_adm") and sheet:
-                    try:
-                        cell=sheet.find(eu); headers=sheet.row_values(1); col=headers.index("status")+1
-                        sheet.update_cell(cell.row,col,new_st_adm); st.success(f"已更新 {eu} 狀態")
-                    except Exception as e: st.error(str(e))
-
-
+    # --- custom expander: 快速編輯用戶 ---
+    _exp_key_8 = "exp_7"
+    if "_exp_state" not in st.session_state:
+        st.session_state["_exp_state"] = {}
+    _exp_open_8 = st.session_state["_exp_state"].get("exp_7", False)
+    _exp_arrow_8 = "▼" if _exp_open_8 else "▶"
+    if st.button(f"{_exp_arrow_8}  快速編輯用戶", key="exp_7_btn", use_container_width=True):
+        st.session_state["_exp_state"]["exp_7"] = not _exp_open_8
+        st.rerun()
+    if _exp_open_8:
+        with st.container():
+            unames = [u.get("username","") for u in users_list]
+            if unames:
+                eu = st.selectbox("選擇用戶", unames, key="eu_adm")
+                ec1,ec2,ec3 = st.columns(3)
+                with ec1:
+                    new_role_adm = st.selectbox("新角色", ["free","pro","admin"], key="new_role_adm")
+                    if st.button("更新角色", key="upd_role_adm") and sheet:
+                        try:
+                            cell=sheet.find(eu); headers=sheet.row_values(1); col=headers.index("role")+1
+                            sheet.update_cell(cell.row,col,new_role_adm); st.success(f"已更新 {eu} 角色")
+                        except Exception as e: st.error(str(e))
+                with ec2:
+                    new_exp_adm = st.text_input("新到期日", key="new_exp_adm", placeholder="YYYY-MM-DD 或 永久")
+                    if st.button("更新到期日", key="upd_exp_adm") and sheet:
+                        try:
+                            cell=sheet.find(eu); headers=sheet.row_values(1); col=headers.index("expiry_date")+1
+                            sheet.update_cell(cell.row,col,new_exp_adm); st.success(f"已更新 {eu} 到期日")
+                        except Exception as e: st.error(str(e))
+                with ec3:
+                    new_st_adm = st.selectbox("帳號狀態", ["active","disabled"], key="new_st_adm")
+                    if st.button("更新狀態", key="upd_st_adm") and sheet:
+                        try:
+                            cell=sheet.find(eu); headers=sheet.row_values(1); col=headers.index("status")+1
+                            sheet.update_cell(cell.row,col,new_st_adm); st.success(f"已更新 {eu} 狀態")
+                        except Exception as e: st.error(str(e))
+            
+            
 # ═══════════════════════════════════════════════════════════════════
 #   MAIN APP ROUTER
 # ═══════════════════════════════════════════════════════════════════
