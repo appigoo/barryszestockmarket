@@ -1432,250 +1432,312 @@ def render_kpi_card(label, value, change, color, spark_values, note=""):
 #   LOGIN PAGE — Dark gradient, cinematic style
 # ═══════════════════════════════════════════════════════════════════
 def render_login():
-    # Language labels for switcher
-    lang_opts = {"繁體中文": "zh-hant", "简体中文": "zh-hans", "English": "en"}
-    lang_rev  = {v: k for k, v in lang_opts.items()}
-    cur_lang  = st.session_state.get("lang", "zh-hant")
+    cur_lang = st.session_state.get("lang", "zh-hant")
 
-    # Full-page CSS — dark gradient background, no Streamlit chrome
+    # ── Handle language switch via query params workaround ──
+    # We use st.button for lang switching (reliable in Streamlit)
+
+    L = {
+        "zh-hant": {"user": "用戶名",  "pass": "密碼",  "btn": "登　入",
+                    "forgot": "忘記密碼？請聯絡管理員",
+                    "disclaimer": "數據僅供參考，不構成投資建議",
+                    "empty": "請填寫用戶名及密碼"},
+        "zh-hans": {"user": "用户名",  "pass": "密码",  "btn": "登　入",
+                    "forgot": "忘记密码？请联系管理员",
+                    "disclaimer": "数据仅供参考，不构成投资建议",
+                    "empty": "请填写用户名及密码"},
+        "en":      {"user": "Username","pass": "Password","btn": "Sign In",
+                    "forgot": "Forgot password? Contact admin",
+                    "disclaimer": "For reference only. Not investment advice.",
+                    "empty": "Please enter username and password"},
+    }
+    lbl = L.get(cur_lang, L["zh-hant"])
+
     st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+HK:wght@300;400;500;700&family=Inter:wght@300;400;500;600;700&display=swap');
-    html, body, [class*="css"] { margin:0; padding:0; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+HK:wght@300;400;500;700&display=swap');
+
+    html, body { margin:0; padding:0; }
+
+    /* ── Full-page dark gradient ── */
     .stApp {
-        background: linear-gradient(160deg, #0d1b2a 0%, #1a1a3e 40%, #0f2027 70%, #1a0a2e 100%) !important;
+        background: linear-gradient(145deg,
+            #0a0f1e 0%,
+            #0d1b35 30%,
+            #0a1628 60%,
+            #12082a 100%) !important;
         min-height: 100vh;
     }
-    #MainMenu, footer, header, .stDeployButton { visibility: hidden; }
-    /* Hide sidebar on login page */
-    section[data-testid="stSidebar"] { display: none !important; }
-    button[data-testid="collapsedControl"],
-    button[data-testid="collapsedControl"] *,
-    [data-testid="stSidebarCollapseButton"],
-    [data-testid="stSidebarCollapseButton"] * {
-        display: none !important; visibility: hidden !important;
-        width: 0 !important; height: 0 !important;
-        pointer-events: none !important;
-    }
-    [data-testid="stVerticalBlock"] { gap: 0 !important; }
-    [data-testid="stHorizontalBlock"] { gap: 0 !important; }
 
-    /* Language switcher row */
-    .login-lang-row {
+    /* ── Hide all Streamlit chrome ── */
+    #MainMenu, footer, header, .stDeployButton { visibility:hidden; }
+    section[data-testid="stSidebar"],
+    button[data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapseButton"] {
+        display: none !important;
+    }
+
+    /* ── Reset Streamlit spacing ── */
+    .block-container {
+        padding: 0 !important;
+        max-width: 100% !important;
+    }
+    [data-testid="stVerticalBlock"] > div { gap: 0 !important; }
+
+    /* ── Language pills ── */
+    .lp-lang-row {
         display: flex;
         justify-content: center;
-        gap: 8px;
-        margin-bottom: 32px;
+        gap: 10px;
+        padding-top: 52px;
+        padding-bottom: 52px;
     }
-    .lang-pill {
-        padding: 5px 16px;
-        border-radius: 20px;
-        font-size: 12px;
+    .lp-lang-pill {
+        padding: 7px 22px;
+        border-radius: 100px;
+        font-size: 13px;
         font-weight: 500;
-        cursor: pointer;
-        border: 1px solid rgba(255,255,255,0.15);
-        color: rgba(255,255,255,0.5);
-        background: transparent;
         font-family: 'Noto Sans HK', sans-serif;
-        transition: all .2s;
-        text-decoration: none;
+        border: 1px solid rgba(255,255,255,0.18);
+        color: rgba(255,255,255,0.45);
+        background: transparent;
+        cursor: pointer;
+        letter-spacing: 0.2px;
     }
-    .lang-pill.active {
-        background: rgba(255,255,255,0.12);
-        color: #ffffff;
-        border-color: rgba(255,255,255,0.35);
+    .lp-lang-pill.on {
+        background: rgba(255,255,255,0.14);
+        border-color: rgba(255,255,255,0.40);
+        color: #fff;
+        font-weight: 600;
     }
 
-    /* Logo circle */
-    .login-logo-circle {
-        width: 72px; height: 72px;
+    /* ── Logo ── */
+    .lp-logo {
+        width: 64px; height: 64px;
         border-radius: 50%;
-        border: 2px solid rgba(255,255,255,0.25);
+        border: 1.5px solid rgba(255,255,255,0.22);
+        background: rgba(255,255,255,0.05);
         display: flex; align-items: center; justify-content: center;
-        margin: 0 auto 20px;
-        background: rgba(255,255,255,0.06);
+        margin: 0 auto 24px;
     }
 
-    /* Title */
-    .login-brand {
-        text-align: center;
-        margin-bottom: 6px;
-        font-size: 28px;
-        font-weight: 700;
-        color: #ffffff;
-        letter-spacing: -0.5px;
+    /* ── Brand ── */
+    .lp-brand {
         font-family: 'Inter', sans-serif;
+        font-size: 32px; font-weight: 800;
+        color: #fff; text-align: center;
+        letter-spacing: -1px; margin-bottom: 8px;
     }
-    .login-brand-sub {
-        text-align: center;
-        font-size: 12px;
-        color: rgba(255,255,255,0.38);
-        letter-spacing: 2px;
+    .lp-sub {
+        font-family: 'Inter', sans-serif;
+        font-size: 11px; font-weight: 400;
+        color: rgba(255,255,255,0.32);
+        text-align: center; letter-spacing: 3px;
         text-transform: uppercase;
-        font-family: 'Inter', sans-serif;
-        margin-bottom: 36px;
+        margin-bottom: 48px;
     }
 
-    /* Input fields override */
-    .login-form .stTextInput > div > div > input {
-        background: rgba(255,255,255,0.07) !important;
-        border: 1px solid rgba(255,255,255,0.12) !important;
-        border-radius: 10px !important;
-        color: #ffffff !important;
-        font-size: 14px !important;
-        padding: 14px 16px !important;
-        font-family: 'Noto Sans HK', 'Inter', sans-serif !important;
-        transition: border-color .2s !important;
+    /* ── Input field overrides ── */
+    .lp-form .stTextInput { margin-bottom: 6px !important; }
+
+    .lp-form .stTextInput label {
+        font-family: 'Inter', sans-serif !important;
+        font-size: 11px !important;
+        font-weight: 500 !important;
+        color: rgba(255,255,255,0.40) !important;
+        letter-spacing: 0.8px !important;
+        text-transform: uppercase !important;
+        margin-bottom: 6px !important;
     }
-    .login-form .stTextInput > div > div > input:focus {
-        border-color: rgba(255,255,255,0.4) !important;
-        background: rgba(255,255,255,0.10) !important;
-        box-shadow: none !important;
+    .lp-form .stTextInput > div > div > input {
+        background: rgba(255,255,255,0.06) !important;
+        border: 1px solid rgba(255,255,255,0.10) !important;
+        border-radius: 12px !important;
+        color: #fff !important;
+        font-size: 15px !important;
+        font-family: 'Inter', 'Noto Sans HK', sans-serif !important;
+        padding: 16px 18px !important;
+        height: 54px !important;
+        transition: all .2s !important;
+        caret-color: #e8517a !important;
     }
-    .login-form .stTextInput > div > div > input::placeholder {
-        color: rgba(255,255,255,0.25) !important;
+    .lp-form .stTextInput > div > div > input::placeholder {
+        color: rgba(255,255,255,0.20) !important;
+        font-size: 15px !important;
     }
-    .login-form .stTextInput label {
-        color: rgba(255,255,255,0.55) !important;
-        font-size: 12px !important;
-        font-weight: 400 !important;
-        letter-spacing: 0.3px !important;
+    .lp-form .stTextInput > div > div > input:focus {
+        border-color: rgba(232,81,122,0.60) !important;
+        background: rgba(255,255,255,0.09) !important;
+        box-shadow: 0 0 0 3px rgba(232,81,122,0.12) !important;
+        outline: none !important;
     }
 
-    /* Submit button override */
-    .login-form .stFormSubmitButton > button {
-        background: #e8517a !important;
-        color: #ffffff !important;
+    /* ── Submit button ── */
+    .lp-form .stFormSubmitButton { margin-top: 28px !important; }
+    .lp-form .stFormSubmitButton > button {
+        background: linear-gradient(135deg, #e8517a 0%, #c43668 100%) !important;
+        color: #fff !important;
         border: none !important;
-        border-radius: 10px !important;
-        padding: 14px 20px !important;
+        border-radius: 12px !important;
+        height: 54px !important;
         font-size: 15px !important;
         font-weight: 600 !important;
+        font-family: 'Inter', 'Noto Sans HK', sans-serif !important;
+        letter-spacing: 1px !important;
         width: 100% !important;
-        font-family: 'Noto Sans HK', 'Inter', sans-serif !important;
-        letter-spacing: 0.3px !important;
-        margin-top: 8px !important;
-        transition: all .2s !important;
         cursor: pointer !important;
+        box-shadow: 0 8px 24px rgba(232,81,122,0.30) !important;
+        transition: all .2s !important;
     }
-    .login-form .stFormSubmitButton > button:hover {
-        background: #d4446d !important;
-        transform: translateY(-1px) !important;
+    .lp-form .stFormSubmitButton > button:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 12px 32px rgba(232,81,122,0.45) !important;
     }
-    .login-form .stFormSubmitButton > button:active {
+    .lp-form .stFormSubmitButton > button:active {
         transform: translateY(0) !important;
     }
 
-    /* Error / warning override */
-    .login-form .stAlert {
-        background: rgba(240,85,85,0.15) !important;
-        border: 1px solid rgba(240,85,85,0.3) !important;
-        border-radius: 9px !important;
-        color: #ff9999 !important;
+    /* ── Error message ── */
+    .lp-form [data-testid="stAlert"] {
+        background: rgba(240,85,85,0.12) !important;
+        border: 1px solid rgba(240,85,85,0.25) !important;
+        border-radius: 10px !important;
+        margin-top: 12px !important;
+    }
+    .lp-form [data-testid="stAlert"] p {
+        color: #ff8fa0 !important;
+        font-size: 13px !important;
     }
 
-    /* Forgot / footer text */
-    .login-footer {
+    /* ── Footer ── */
+    .lp-footer {
         text-align: center;
-        margin-top: 20px;
-        font-size: 12px;
-        color: rgba(255,255,255,0.3);
-        font-family: 'Noto Sans HK', sans-serif;
-        line-height: 1.8;
+        padding-top: 40px;
+        padding-bottom: 40px;
+        font-family: 'Inter', 'Noto Sans HK', sans-serif;
+    }
+    .lp-footer-forgot {
+        font-size: 13px;
+        color: rgba(255,255,255,0.32);
+        cursor: pointer;
+        transition: color .2s;
+        margin-bottom: 10px;
+    }
+    .lp-footer-legal {
+        font-size: 11px;
+        color: rgba(255,255,255,0.18);
+        letter-spacing: 0.3px;
+    }
+
+    /* ── Sidebar lang buttons ── */
+    .lp-lang-btns .stButton > button {
+        background: transparent !important;
+        border: 1px solid rgba(255,255,255,0.18) !important;
+        border-radius: 100px !important;
+        color: rgba(255,255,255,0.45) !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        padding: 6px 20px !important;
+        width: auto !important;
+        transition: all .15s !important;
+        box-shadow: none !important;
+    }
+    .lp-lang-btns .stButton > button:hover {
+        background: rgba(255,255,255,0.10) !important;
+        border-color: rgba(255,255,255,0.35) !important;
+        color: #fff !important;
+        transform: none !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    # Centered layout — top spacer + narrow column
-    st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
+    # ── Layout: 3 columns, use centre ──
+    _, centre, _ = st.columns([1, 1.05, 1])
 
-    _, mid, _ = st.columns([1, 1.1, 1])
-    with mid:
-        # ── Language switcher ──
-        lang_html = '<div class="login-lang-row">'
-        for label, code in lang_opts.items():
-            active = "active" if code == cur_lang else ""
-            lang_html += f'<span class="lang-pill {active}" onclick="">{label}</span>'
-        lang_html += "</div>"
-        st.markdown(lang_html, unsafe_allow_html=True)
+    with centre:
+        # ── Language switcher (3 buttons) ──
+        st.markdown('<div style="height:52px"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="lp-lang-btns">', unsafe_allow_html=True)
+        lc1, lc2, lc3 = st.columns(3)
+        lang_map = [("繁體中文","zh-hant"), ("简体中文","zh-hans"), ("English","en")]
+        for col, (label, code) in zip([lc1,lc2,lc3], lang_map):
+            with col:
+                active_style = "font-weight:700;color:#fff;border-color:rgba(255,255,255,.4);background:rgba(255,255,255,.12)" if cur_lang == code else ""
+                if st.button(label, key=f"lang_{code}",
+                             use_container_width=True):
+                    st.session_state["lang"] = code
+                    st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        # Real language selectbox (hidden label, drives session state)
-        cur_label = lang_rev.get(cur_lang, "繁體中文")
-        new_lang_label = st.selectbox(
-            "", list(lang_opts.keys()),
-            index=list(lang_opts.keys()).index(cur_label),
-            key="login_lang_sel",
-            label_visibility="collapsed",
-        )
-        if lang_opts[new_lang_label] != cur_lang:
-            st.session_state["lang"] = lang_opts[new_lang_label]
-            st.rerun()
+        st.markdown('<div style="height:36px"></div>', unsafe_allow_html=True)
 
-        # ── Logo + brand ──
-        st.markdown("""
-        <div class="login-logo-circle">
-          <svg width="32" height="32" viewBox="0 0 20 20" fill="none">
-            <path d="M2 15L6 8.5l3.5 4.5 4-7L18 15H2z"
-                  fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.3"
-                  stroke-linejoin="round"/>
-          </svg>
-        </div>
-        <div class="login-brand">MarketIQ</div>
-        <div class="login-brand-sub">Intelligence Dashboard</div>
-        """, unsafe_allow_html=True)
-
-        # ── Login form ──
-        with st.container():
-            st.markdown('<div class="login-form">', unsafe_allow_html=True)
-            with st.form("login_form", clear_on_submit=False):
-                uname_label = {"zh-hant": "用戶名", "zh-hans": "用户名", "en": "Username"}.get(cur_lang, "用戶名")
-                pass_label  = {"zh-hant": "密碼",   "zh-hans": "密码",   "en": "Password"}.get(cur_lang, "密碼")
-                btn_label   = {"zh-hant": "登　入", "zh-hans": "登　入", "en": "Log In"}.get(cur_lang, "登入")
-
-                username = st.text_input(uname_label, placeholder=uname_label, key="login_u", label_visibility="visible")
-                password = st.text_input(pass_label,  placeholder=pass_label,  key="login_p", type="password", label_visibility="visible")
-                submit   = st.form_submit_button(btn_label)
-
-                if submit:
-                    fails = st.session_state.get("login_fails", 0)
-                    lockout_until = st.session_state.get("lockout_until")
-                    if lockout_until and datetime.now() < lockout_until:
-                        st.error(t("login_locked"))
-                    elif not username or not password:
-                        st.error({"zh-hant": "請填寫用戶名及密碼", "zh-hans": "请填写用户名及密码", "en": "Please enter username and password"}.get(cur_lang, "請填寫用戶名及密碼"))
-                    else:
-                        ok, user_data, err = authenticate(username, password)
-                        if ok:
-                            st.session_state["logged_in"]    = True
-                            st.session_state["username"]     = user_data.get("username", username)
-                            st.session_state["role"]         = user_data.get("role", "free")
-                            st.session_state["region"]       = user_data.get("region", "UK")
-                            st.session_state["lang"]         = user_data.get("language", "zh-hant")
-                            st.session_state["theme"]        = user_data.get("theme", "dark")
-                            st.session_state["expiry_date"]  = str(user_data.get("expiry_date", "2099-12-31"))
-                            st.session_state["login_fails"]  = 0
-                            st.rerun()
-                        else:
-                            st.session_state["login_fails"] = fails + 1
-                            if fails + 1 >= 5:
-                                st.session_state["lockout_until"] = datetime.now() + timedelta(minutes=30)
-                                st.error(t("login_locked"))
-                            else:
-                                st.error(err)
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        # ── Footer ──
-        forgot_txt = {"zh-hant": "忘記密碼？請聯絡管理員", "zh-hans": "忘记密码？请联系管理员", "en": "Forgot password? Contact admin"}.get(cur_lang, "忘記密碼？請聯絡管理員")
-        disclaimer = {"zh-hant": "數據僅供參考，不構成投資建議", "zh-hans": "数据仅供参考，不构成投资建议", "en": "For reference only. Not investment advice."}.get(cur_lang, "數據僅供參考")
+        # ── Logo + Brand ──
         st.markdown(
-            f'<div class="login-footer">'
-            f'{forgot_txt}<br><br>{disclaimer}'
-            f'</div>',
+            '<div class="lp-logo">'
+            '<svg width="28" height="28" viewBox="0 0 20 20" fill="none">'
+            '<path d="M2 15L6 8.5l3.5 4.5 4-7L18 15H2z" '
+            'fill="none" stroke="rgba(255,255,255,0.8)" '
+            'stroke-width="1.4" stroke-linejoin="round"/>'
+            '</svg></div>'
+            '<div class="lp-brand">MarketIQ</div>'
+            '<div class="lp-sub">Intelligence Dashboard</div>',
             unsafe_allow_html=True,
         )
 
-    st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
+        # ── Login form ──
+        st.markdown('<div class="lp-form">', unsafe_allow_html=True)
+        with st.form("login_form", clear_on_submit=False):
+            username = st.text_input(
+                lbl["user"].upper(),
+                placeholder=lbl["user"],
+                key="login_u",
+            )
+            st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+            password = st.text_input(
+                lbl["pass"].upper(),
+                placeholder=lbl["pass"],
+                type="password",
+                key="login_p",
+            )
+            submit = st.form_submit_button(lbl["btn"])
+
+            if submit:
+                fails = st.session_state.get("login_fails", 0)
+                lockout_until = st.session_state.get("lockout_until")
+                if lockout_until and datetime.now() < lockout_until:
+                    st.error(t("login_locked"))
+                elif not username or not password:
+                    st.error(lbl["empty"])
+                else:
+                    ok, user_data, err = authenticate(username, password)
+                    if ok:
+                        st.session_state["logged_in"]   = True
+                        st.session_state["username"]    = user_data.get("username", username)
+                        st.session_state["role"]        = user_data.get("role", "free")
+                        st.session_state["region"]      = user_data.get("region", "UK")
+                        st.session_state["lang"]        = user_data.get("language", "zh-hant")
+                        st.session_state["theme"]       = user_data.get("theme", "dark")
+                        st.session_state["expiry_date"] = str(user_data.get("expiry_date", "2099-12-31"))
+                        st.session_state["login_fails"] = 0
+                        st.rerun()
+                    else:
+                        st.session_state["login_fails"] = fails + 1
+                        if fails + 1 >= 5:
+                            st.session_state["lockout_until"] = datetime.now() + timedelta(minutes=30)
+                            st.error(t("login_locked"))
+                        else:
+                            st.error(err)
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Footer ──
+        st.markdown(
+            f'<div class="lp-footer">'
+            f'<div class="lp-footer-forgot">{lbl["forgot"]}</div>'
+            f'<div class="lp-footer-legal">{lbl["disclaimer"]}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════
