@@ -348,9 +348,12 @@ def get_font_size():
 
 
 def inject_css():
-    """Inject all CSS based on current theme + font size"""
+    """Inject all CSS based on current theme + font size + sidebar state"""
     th = get_theme()
     fs = get_font_size()
+    collapsed = st.session_state.get("sb_collapsed", False)
+    sb_w   = "60px"  if collapsed else "240px"
+    sb_pad = "8px"   if collapsed else "20px 16px"
     css = f"""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+HK:wght@300;400;500;700&family=Inter:wght@400;500;600;700;800;900&display=swap');
@@ -439,19 +442,19 @@ def inject_css():
     section[data-testid="stSidebar"] {{
         background: {th['nav']} !important;
         border-right: 1px solid {th['nav_border']} !important;
-        min-width: 240px !important;
-        max-width: 240px !important;
+        min-width: {sb_w} !important;
+        max-width: {sb_w} !important;
+        transition: min-width .25s ease, max-width .25s ease !important;
+        overflow: hidden !important;
     }}
     section[data-testid="stSidebar"] > div {{
-        padding: 20px 16px !important;
+        padding: {sb_pad} !important;
+        width: {sb_w} !important;
+        overflow: hidden !important;
     }}
-    /* Make native sidebar collapse button invisible but clickable for our toggle */
+    /* Hide sidebar collapse button completely */
     button[data-testid="collapsedControl"] {{
-        opacity: 0 !important;
-        width: 1px !important;
-        height: 1px !important;
-        position: absolute !important;
-        pointer-events: auto !important;
+        display: none !important;
     }}
     /* Sidebar text color override */
     section[data-testid="stSidebar"] p,
@@ -1562,12 +1565,30 @@ def render_login():
 # ═══════════════════════════════════════════════════════════════════
 def render_sidebar():
     th = get_theme()
-    uname  = st.session_state.get("username", "User")
-    role_v = st.session_state.get("role", "free")
-    region = st.session_state.get("region", "UK")
+    uname   = st.session_state.get("username", "User")
+    role_v  = st.session_state.get("role", "free")
+    region  = st.session_state.get("region", "UK")
+    collapsed = st.session_state.get("sb_collapsed", False)
 
     with st.sidebar:
-        # ── Sidebar toggle button (collapse/expand) ──
+        if collapsed:
+            # ── Mini collapsed view — just toggle button ──
+            st.markdown(
+                f'<div style="display:flex;justify-content:center;padding:8px 0 12px">'
+                f'<div style="width:36px;height:36px;border-radius:10px;background:{th["green"]};'
+                f'display:flex;align-items:center;justify-content:center">'
+                f'<svg width="18" height="18" viewBox="0 0 20 20" fill="none">'
+                f'<path d="M2 15L6 8.5l3.5 4.5 4-7L18 15H2z" fill="#111118"/></svg>'
+                f'</div></div>',
+                unsafe_allow_html=True,
+            )
+            if st.button("▶", key="sb_toggle", help="展開側欄",
+                         use_container_width=True):
+                st.session_state["sb_collapsed"] = False
+                st.rerun()
+            return
+
+        # ── Full expanded sidebar ──
         col_logo, col_toggle = st.columns([4, 1])
         with col_logo:
             st.markdown(
@@ -1583,16 +1604,12 @@ def render_sidebar():
             )
         with col_toggle:
             st.markdown("<div style='padding-top:4px'>", unsafe_allow_html=True)
-            if st.button("☰", key="sb_toggle", help="收起/展開側欄",
+            collapsed = st.session_state.get("sb_collapsed", False)
+            icon = "▶" if collapsed else "◀"
+            if st.button(icon, key="sb_toggle", help="收起/展開側欄",
                          use_container_width=True):
-                # Toggle sidebar via JavaScript
-                st.markdown("""
-                <script>
-                const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
-                const btn = window.parent.document.querySelector('[data-testid="collapsedControl"]');
-                if(btn) btn.click();
-                </script>
-                """, unsafe_allow_html=True)
+                st.session_state["sb_collapsed"] = not collapsed
+                st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown(f'<hr style="border:none;border-top:1px solid {th["nav_border"]};margin:0 0 14px">', unsafe_allow_html=True)
