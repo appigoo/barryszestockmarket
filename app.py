@@ -1431,94 +1431,128 @@ def render_login():
 
 
 # ═══════════════════════════════════════════════════════════════════
-#   TOP BAR (Logo + Status + Theme + Language + User)
+#   SIDEBAR — Left nav matching prototype design
 # ═══════════════════════════════════════════════════════════════════
-def render_topbar():
+def render_sidebar():
     th = get_theme()
-    status = market_status()
+    uname  = st.session_state.get("username", "User")
+    role_v = st.session_state.get("role", "free")
+    region = st.session_state.get("region", "UK")
 
-    us_chip = f'<div class="chip"><span class="sdot {"sdot-on" if status["us"] else "sdot-off"}"></span>{t("us_open" if status["us"] else "us_closed")}</div>'
-    hk_chip = f'<div class="chip"><span class="sdot {"sdot-on" if status["hk"] else "sdot-off"}"></span>{t("hk_open" if status["hk"] else "hk_closed")}</div>'
+    with st.sidebar:
+        # ── Logo ──
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:11px;'
+            f'padding:4px 0 20px;border-bottom:1px solid {th["nav_border"]};margin-bottom:18px">'
+            f'<div style="width:38px;height:38px;border-radius:10px;background:{th["green"]};'
+            f'display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+            f'<svg width="20" height="20" viewBox="0 0 20 20" fill="none">'
+            f'<path d="M2 15L6 8.5l3.5 4.5 4-7L18 15H2z" fill="#111118"/></svg></div>'
+            f'<div><div style="font-size:15px;font-weight:700;color:#e8eaf8;letter-spacing:-.3px">MarketIQ</div>'
+            f'<div style="font-size:9px;color:{th["nav_text"]};letter-spacing:.6px">INTELLIGENCE DASHBOARD</div>'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
 
-    role_badge = {"admin": "👑 Admin", "pro": "⭐ Pro", "free": "🆓 Free"}.get(
-        st.session_state.get("role", "free"), "🆓 Free"
-    )
+        # ── Market status ──
+        status = market_status()
+        for code, label_on, label_off in [
+            ("us", t("us_open"), t("us_closed")),
+            ("hk", t("hk_open"), t("hk_closed")),
+        ]:
+            is_open = status.get(code, False)
+            dot_col = th["green"] if is_open else th["red"]
+            label   = label_on if is_open else label_off
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:8px;'
+                f'font-size:12px;color:{th["nav_text"]};padding:3px 0">'
+                f'<span style="width:7px;height:7px;border-radius:50%;'
+                f'background:{dot_col};display:inline-block;flex-shrink:0;'
+                f'{"box-shadow:0 0 5px "+dot_col if is_open else ""}"></span>'
+                f'{label}</div>',
+                unsafe_allow_html=True,
+            )
 
-    st.markdown(f"""
-    <div class="topbar">
-      <div class="topbar-left">
-        <div class="topbar-logo">
-          <div class="tb-mark">
-            <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-              <path d="M2 15L6 8.5l3.5 4.5 4-7L18 15H2z" fill="#111118"/>
-            </svg>
-          </div>
-          <div>
-            <div class="tb-title">MarketIQ</div>
-            <div class="tb-sub">{t('app_sub')}</div>
-          </div>
-        </div>
-        {us_chip}
-        {hk_chip}
-      </div>
-      <div class="topbar-right">
-        <div class="chip" style="background:{th['nav_active_bg']};color:{th['nav_text_active']};border-color:{th['nav_text_active']}33">
-          {role_badge} · {st.session_state.get('username','')}
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+        st.markdown(f'<div style="height:14px"></div>', unsafe_allow_html=True)
+        st.markdown(f'<hr style="border:none;border-top:1px solid {th["nav_border"]};margin:0 0 14px">', unsafe_allow_html=True)
 
+        # ── Theme controls ──
+        st.markdown(f'<div style="font-size:10px;color:{th["nav_text"]};letter-spacing:1.2px;text-transform:uppercase;margin-bottom:7px">主題</div>', unsafe_allow_html=True)
+        tc1, tc2, tc3 = st.columns(3)
+        cur_theme = st.session_state.get("theme", "dark")
+        with tc1:
+            if st.button(t("theme_dark"), key="sb_dark", use_container_width=True,
+                         type="primary" if cur_theme == "dark" else "secondary"):
+                st.session_state["theme"] = "dark"; st.rerun()
+        with tc2:
+            if st.button(t("theme_light"), key="sb_light", use_container_width=True,
+                         type="primary" if cur_theme == "light" else "secondary"):
+                st.session_state["theme"] = "light"; st.rerun()
+        with tc3:
+            if st.button(t("theme_eye"), key="sb_eye", use_container_width=True,
+                         type="primary" if cur_theme == "eye" else "secondary"):
+                st.session_state["theme"] = "eye"; st.rerun()
 
-# ═══════════════════════════════════════════════════════════════════
-#   CONTROL PANEL (Theme / Font / Language / Logout)
-# ═══════════════════════════════════════════════════════════════════
-def render_controls():
-    """Top-right control row above main content"""
-    cols = st.columns([1, 1, 1, 1, 1, 1, 1, 1])
+        st.markdown(f'<div style="height:10px"></div>', unsafe_allow_html=True)
 
-    with cols[0]:
-        if st.button(t("theme_dark"), key="bt_dark",
-                     type="primary" if st.session_state.get("theme") == "dark" else "secondary"):
-            st.session_state["theme"] = "dark"
-            st.rerun()
-    with cols[1]:
-        if st.button(t("theme_light"), key="bt_light",
-                     type="primary" if st.session_state.get("theme") == "light" else "secondary"):
-            st.session_state["theme"] = "light"
-            st.rerun()
-    with cols[2]:
-        if st.button(t("theme_eye"), key="bt_eye",
-                     type="primary" if st.session_state.get("theme") == "eye" else "secondary"):
-            st.session_state["theme"] = "eye"
-            st.rerun()
-    with cols[3]:
-        if st.button("A-", key="bt_sm",
-                     type="primary" if st.session_state.get("font_size") == "sm" else "secondary"):
-            st.session_state["font_size"] = "sm"
-            st.rerun()
-    with cols[4]:
-        if st.button("A", key="bt_md",
-                     type="primary" if st.session_state.get("font_size", "md") == "md" else "secondary"):
-            st.session_state["font_size"] = "md"
-            st.rerun()
-    with cols[5]:
-        if st.button("A+", key="bt_lg",
-                     type="primary" if st.session_state.get("font_size") == "lg" else "secondary"):
-            st.session_state["font_size"] = "lg"
-            st.rerun()
-    with cols[6]:
-        lang_options = {"繁體中文": "zh-hant", "简体中文": "zh-hans", "English": "en"}
-        current_lang_label = next((k for k, v in lang_options.items()
-                                   if v == st.session_state.get("lang", "zh-hant")), "繁體中文")
-        new_lang = st.selectbox("Lang", options=list(lang_options.keys()),
-                                index=list(lang_options.keys()).index(current_lang_label),
-                                label_visibility="collapsed", key="lang_sel")
-        if lang_options[new_lang] != st.session_state.get("lang"):
-            st.session_state["lang"] = lang_options[new_lang]
-            st.rerun()
-    with cols[7]:
-        if st.button(f"⏻ {t('logout')}", key="bt_logout"):
+        # ── Font size — THIS is where A- A A+ actually works ──
+        st.markdown(f'<div style="font-size:10px;color:{th["nav_text"]};letter-spacing:1.2px;text-transform:uppercase;margin-bottom:7px">字體大小</div>', unsafe_allow_html=True)
+        fc1, fc2, fc3 = st.columns(3)
+        cur_fs = st.session_state.get("font_size", "md")
+        with fc1:
+            if st.button("A−", key="sb_sm", use_container_width=True,
+                         type="primary" if cur_fs == "sm" else "secondary"):
+                st.session_state["font_size"] = "sm"; st.rerun()
+        with fc2:
+            if st.button("A", key="sb_md", use_container_width=True,
+                         type="primary" if cur_fs == "md" else "secondary"):
+                st.session_state["font_size"] = "md"; st.rerun()
+        with fc3:
+            if st.button("A+", key="sb_lg", use_container_width=True,
+                         type="primary" if cur_fs == "lg" else "secondary"):
+                st.session_state["font_size"] = "lg"; st.rerun()
+
+        st.markdown(f'<div style="height:10px"></div>', unsafe_allow_html=True)
+
+        # ── Language ──
+        st.markdown(f'<div style="font-size:10px;color:{th["nav_text"]};letter-spacing:1.2px;text-transform:uppercase;margin-bottom:7px">語言 / Language</div>', unsafe_allow_html=True)
+        lang_opts = {"繁體中文": "zh-hant", "简体中文": "zh-hans", "English": "en"}
+        cur_lang  = st.session_state.get("lang", "zh-hant")
+        cur_label = next((k for k, v in lang_opts.items() if v == cur_lang), "繁體中文")
+        new_lang  = st.selectbox("", list(lang_opts.keys()),
+                                  index=list(lang_opts.keys()).index(cur_label),
+                                  key="sb_lang", label_visibility="collapsed")
+        if lang_opts[new_lang] != cur_lang:
+            st.session_state["lang"] = lang_opts[new_lang]; st.rerun()
+
+        st.markdown(f'<hr style="border:none;border-top:1px solid {th["nav_border"]};margin:14px 0">', unsafe_allow_html=True)
+
+        # ── User pill ──
+        role_lbl = {"admin": "👑 ADMIN", "pro": "⭐ PRO", "free": "🆓 FREE"}.get(role_v, "FREE")
+        role_col = {"admin": th["orange"], "pro": th["green"], "free": th["text3"]}.get(role_v, th["text3"])
+        initial  = uname[0].upper() if uname else "U"
+
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:10px;padding:11px 12px;'
+            f'background:rgba(255,255,255,0.05);border-radius:11px;'
+            f'border:1px solid {th["nav_border"]};margin-bottom:12px">'
+            f'<div style="width:32px;height:32px;border-radius:50%;'
+            f'background:linear-gradient(135deg,{th["green"]},{th["blue"]});'
+            f'display:flex;align-items:center;justify-content:center;'
+            f'font-size:13px;font-weight:700;color:#111118;flex-shrink:0">{initial}</div>'
+            f'<div style="flex:1;min-width:0">'
+            f'<div style="font-size:13px;font-weight:600;color:{th["text1"]};'
+            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{uname}</div>'
+            f'<div style="font-size:10px;color:{th["text3"]}">{region}</div></div>'
+            f'<span style="font-size:9px;font-weight:700;color:{role_col};'
+            f'background:{role_col}22;padding:2px 7px;border-radius:5px;'
+            f'border:1px solid {role_col}44;flex-shrink:0">{role_lbl}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Logout ──
+        if st.button(f"⏻  {t('logout')}", key="sb_logout", use_container_width=True):
             for k in list(st.session_state.keys()):
                 if k != "lockout_until":
                     del st.session_state[k]
@@ -1526,555 +1560,654 @@ def render_controls():
 
 
 # ═══════════════════════════════════════════════════════════════════
-#   TAB 1 — GLOBAL MARKET MONITOR
+#   TOPBAR — slim bar inside main area (title + status + controls)
 # ═══════════════════════════════════════════════════════════════════
-def tab_global_market():
-    th = get_theme()
+def render_main_topbar():
+    th  = get_theme()
+    now = datetime.now(pytz.timezone("Europe/London")).strftime("%d/%m/%Y %H:%M")
+    status = market_status()
 
-    # Page header
-    now_str = datetime.now(pytz.timezone("Europe/London")).strftime("%d/%m/%Y %H:%M")
-    st.markdown(f"""
-    <div class="page-header">
-      <div class="page-title">{t('app_title')}</div>
-      <div class="page-sub">{t('last_update')} {now_str} London · {t('data_source')}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    us_col  = th["green"] if status.get("us") else th["red"]
+    hk_col  = th["green"] if status.get("hk") else th["red"]
+    us_lbl  = t("us_open"  if status.get("us") else "us_closed")
+    hk_lbl  = t("hk_open"  if status.get("hk") else "hk_closed")
 
-    # Eye-care banner
-    if st.session_state.get("theme") == "eye":
-        st.markdown(f'<div class="eye-banner">🍃 {t("eye_banner")}</div>', unsafe_allow_html=True)
-
-    # Expiry warning
-    try:
-        exp = datetime.strptime(st.session_state.get("expiry_date", "2099-12-31"), "%Y-%m-%d").date()
-        days_left = (exp - datetime.now().date()).days
-        if 0 < days_left <= 7 and st.session_state.get("role") == "pro":
-            st.markdown(f'<div class="expiry-banner">⚠️ {t("expiry_warn").format(days_left)}</div>', unsafe_allow_html=True)
-    except Exception:
-        pass
-
-    # ── KPI ROW ──
-    with st.spinner(t("loading")):
-        kpi = fetch_kpi_data()
-
-    kpi_cols = st.columns(4)
-    kpi_configs = [
-        ("sp500", t("sp500"), "green", t("today")),
-        ("nasdaq", t("nasdaq"), "blue", t("today")),
-        ("vix", t("vix"), "orange", t("low_vol")),
-        ("gold", t("gold"), "purple", t("flat")),
-    ]
-    for col, (key, label, color, note) in zip(kpi_cols, kpi_configs):
-        with col:
-            d = kpi.get(key)
-            if d:
-                val_str = fmt_num(d["value"], decimals=1 if key in ("vix", "gold") else 0)
-                if key in ("sp500", "nasdaq"):
-                    val_str = fmt_num(d["value"], 0)
-                st.markdown(
-                    render_kpi_card(label, val_str, d["change"], color, d["spark"], note),
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(
-                    render_kpi_card(label, "—", 0, color, [], note),
-                    unsafe_allow_html=True
-                )
-
-    st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
-
-    # ── MID ROW: Sector Chart + Heatmap ──
-    mid_col1, mid_col2 = st.columns([1.7, 1])
-
-    sector_data = fetch_sector_data("1m")
-
-    with mid_col1:
-        st.markdown(f"""
-        <div class="ds-card">
-          <div class="card-hd">
-            <div>
-              <div class="card-title">{t('sector_compare')}</div>
-              <div class="card-sub">{t('sector_sub')}</div>
-            </div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Plotly bar chart
-        sorted_sectors = sorted(sector_data.items(), key=lambda x: x[1], reverse=True)
-        names = [s[0] for s in sorted_sectors]
-        values = [s[1] for s in sorted_sectors]
-        colors = [th["green"] if v >= 0 else th["red"] for v in values]
-
-        fig = go.Figure(go.Bar(
-            x=names, y=values,
-            marker_color=colors,
-            marker_line_color=colors,
-            marker_line_width=1.5,
-            text=[fmt_pct(v, 1) for v in values],
-            textposition="outside",
-            textfont=dict(size=10, color=th["text2"], family="Inter"),
-        ))
-        fig.update_layout(
-            paper_bgcolor=th["card"],
-            plot_bgcolor=th["card"],
-            height=200,
-            margin=dict(l=10, r=10, t=10, b=40),
-            showlegend=False,
-            xaxis=dict(
-                showgrid=False,
-                tickfont=dict(size=10, color=th["chart_tick"], family="Inter"),
-                tickangle=-30,
-            ),
-            yaxis=dict(
-                gridcolor=th["chart_grid"],
-                tickfont=dict(size=10, color=th["chart_tick"], family="Inter"),
-                ticksuffix="%",
-                zeroline=True,
-                zerolinecolor=th["border"],
-            ),
-            font=dict(family="Noto Sans HK, Inter"),
-        )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-    with mid_col2:
-        # Sort sectors by value descending for heatmap
-        sorted_for_hm = sorted(sector_data.items(), key=lambda x: x[1], reverse=True)
-        max_abs = max(abs(v) for _, v in sorted_for_hm) if sorted_for_hm else 1
-
-        st.markdown(
-            f'<div class="ds-card"><div class="card-hd">'
-            f'<div class="card-title">{t("sector_heatmap")}</div></div>'
-            f'<div class="hm-grid">',
-            unsafe_allow_html=True,
-        )
-
-        for name, val in sorted_for_hm[:8]:
-            pct_w = round(abs(val) / max_abs * 100, 1)
-            bar_col = th["green"] if val >= 0 else th["red"]
-            txt_col = th["green"] if val >= 0 else th["red"]
-            val_str = fmt_pct(val, 1)
-            st.markdown(
-                f'<div class="hm-row">'
-                f'<span class="hm-name">{name}</span>'
-                f'<div class="hm-bar-w">'
-                f'<div class="hm-bar" style="width:{pct_w}%;background:{bar_col}"></div>'
-                f'</div>'
-                f'<span class="hm-val" style="color:{txt_col}">{val_str}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-        st.markdown('</div></div>', unsafe_allow_html=True)
-
-    st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
-
-    # ── BOTTOM ROW: Watchlist + Regime + VIX ──
-    bot_col1, bot_col2, bot_col3 = st.columns(3)
-
-    # Default watchlist
-    default_watchlist = ["TSLA", "NVDA", "AAPL", "META", "AMZN"]
-    signals = fetch_watchlist_signals(default_watchlist)
-
-    with bot_col1:
-        sig_parts = []
-        for s in signals:
-            sc = s["score"]
-            if sc >= 70:
-                badge_cls = "b-buy"
-                badge_txt = t("buy")
-                dot_color = th["green"]
-                sc_color = th["green"]
-                glow = f"box-shadow:0 0 5px {th['green']}"
-            elif sc >= 45:
-                badge_cls = "b-watch"
-                badge_txt = t("watch")
-                dot_color = th["orange"]
-                sc_color = th["orange"]
-                glow = ""
-            else:
-                badge_cls = "b-avoid"
-                badge_txt = t("avoid")
-                dot_color = th["red"]
-                sc_color = th["red"]
-                glow = f"box-shadow:0 0 5px {th['red']}"
-
-            price_str = f"{s['price']:.2f}"
-            sig_parts.append(
-                f'<div class="si-row">'
-                f'<div class="si-l">'
-                f'<span class="si-dot" style="background:{dot_color};{glow}"></span>'
-                f'<span class="si-tk">{s["ticker"]}</span>'
-                f'<span class="si-pr">${price_str}</span>'
-                f'</div>'
-                f'<div class="si-r">'
-                f'<span class="si-sc" style="color:{sc_color}">{sc}</span>'
-                f'<span class="badge {badge_cls}">{badge_txt}</span>'
-                f'</div>'
-                f'</div>'
-            )
-        sig_inline = "".join(sig_parts)
-        wl_title = t("watchlist_signals")
-        entry_lbl = t("entry_score")
-        st.markdown(
-            f'<div class="ds-card">'
-            f'<div class="card-hd">'
-            f'<div class="card-title">{wl_title}</div>'
-            f'<span class="card-pill">{entry_lbl}</span>'
-            f'</div>'
-            f'{sig_inline}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-    with bot_col2:
-        regime = compute_market_regime()
-        if regime:
-            regime_label = t(regime["regime"])
-            regime_color = {"green": th["green"], "red": th["red"],
-                          "orange": th["orange"], "blue": th["blue"]}.get(regime["color"], th["green"])
-
-            mom_v = regime["momentum"]
-            bre_v = regime["breadth"]
-            sen_v = regime["sentiment"]
-            vol_v = regime["volatility"]
-            vix_v = f"{regime['vix']:.1f}"
-            reg_title  = t("market_regime")
-            cur_state  = t("current_state")
-            mom_lbl    = t("momentum")
-            bre_lbl    = t("breadth")
-            sen_lbl    = t("sentiment")
-            vol_lbl    = t("volatility")
-            ai_lbl     = t("ai_advice")
-            ai_txt     = t("ai_advice_text")
-
-            st.markdown(
-                f'<div class="ds-card">'
-                f'<div class="card-hd"><div class="card-title">{reg_title}</div></div>'
-                f'<div class="regime-state-lbl">{cur_state}</div>'
-                f'<div class="regime-val" style="color:{regime_color}">{regime_label}</div>'
-                f'<div class="reg-bar">'
-                f'<div class="reg-bar-hd"><span>{mom_lbl}</span>'
-                f'<span style="color:{th["green"]}">{mom_v} / 100</span></div>'
-                f'<div class="reg-bar-track">'
-                f'<div class="reg-bar-fill" style="width:{mom_v}%;background:{th["green"]}"></div>'
-                f'</div></div>'
-                f'<div class="reg-bar">'
-                f'<div class="reg-bar-hd"><span>{bre_lbl}</span>'
-                f'<span style="color:{th["blue"]}">{bre_v} / 100</span></div>'
-                f'<div class="reg-bar-track">'
-                f'<div class="reg-bar-fill" style="width:{bre_v}%;background:{th["blue"]}"></div>'
-                f'</div></div>'
-                f'<div class="reg-bar">'
-                f'<div class="reg-bar-hd"><span>{sen_lbl}</span>'
-                f'<span style="color:{th["orange"]}">{sen_v} / 100</span></div>'
-                f'<div class="reg-bar-track">'
-                f'<div class="reg-bar-fill" style="width:{sen_v}%;background:{th["orange"]}"></div>'
-                f'</div></div>'
-                f'<div class="reg-bar">'
-                f'<div class="reg-bar-hd"><span>{vol_lbl}</span>'
-                f'<span style="color:{th["green"]}">VIX {vix_v}</span></div>'
-                f'<div class="reg-bar-track">'
-                f'<div class="reg-bar-fill" style="width:{vol_v}%;background:{th["green"]}"></div>'
-                f'</div></div>'
-                f'<div class="ai-tip">'
-                f'<div class="ai-tip-l">{ai_lbl}</div>'
-                f'<div class="ai-tip-t">{ai_txt}</div>'
-                f'</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-    with bot_col3:
-        vix_term = fetch_vix_term()
-        vix_9d = vix_term.get("9D")
-        vix_spot = vix_term.get("VIX")
-        vix_3m = vix_term.get("3M")
-        vix_6m = vix_term.get("6M")
-
-        vix_vals = [v or 20 for v in [vix_9d, vix_spot, vix_3m, vix_6m]]
-        max_v = max(vix_vals) if vix_vals else 30
-        bar_heights = [(v / max_v * 100) if max_v else 0 for v in vix_vals]
-
-        # Determine contango or backwardation
-        is_contango = (vix_6m or 0) > (vix_spot or 0)
-        contango_text = t("contango_text") if is_contango else t("backwardation_text")
-
-        bar_colors = [th["blue"], th["blue"], "#8880e8", th["purple"]]
-        labels = ["9D", "VIX", "3M", "6M"]
-
-        # Build bars HTML inline - avoid variable embedding issue
-        bars_parts = []
-        for h, c, lbl in zip(bar_heights, bar_colors, labels):
-            h_r = round(h, 1)
-            bars_parts.append(
-                f'<div class="vix-bar-c">'
-                f'<div class="vix-bar" style="height:{h_r}%;background:{c}"></div>'
-                f'<div class="vix-bar-l">{lbl}</div>'
-                f'</div>'
-            )
-        bars_inline = "".join(bars_parts)
-
-        row_data = [
-            ("VIX 9D", vix_9d, th["green"] if vix_9d and vix_9d < 18 else th["text1"]),
-            (t("vix_spot"), vix_spot, th["orange"] if vix_spot and vix_spot > 18 else th["text1"]),
-            ("VIX 3M", vix_3m, th["text1"]),
-            ("VIX 6M", vix_6m, th["text1"]),
-        ]
-        rows_parts = []
-        for label, val, color in row_data:
-            val_str = f"{val:.1f}" if val else "—"
-            rows_parts.append(
-                f'<div class="vix-row">'
-                f'<span class="vrt">{label}</span>'
-                f'<span class="vrv" style="color:{color}">{val_str}</span>'
-                f'</div>'
-            )
-        rows_inline = "".join(rows_parts)
-
-        vix_title = t("vix_term")
-        st.markdown(
-            f'<div class="ds-card">'
-            f'<div class="card-hd"><div class="card-title">{vix_title}</div></div>'
-            f'<div class="vix-curve">{bars_inline}</div>'
-            f'<div>{rows_inline}</div>'
-            f'<div class="ctag">{contango_text}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-
-
-# ═══════════════════════════════════════════════════════════════════
-#   DATA HELPERS FOR ALL TABS
-# ═══════════════════════════════════════════════════════════════════
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_ticker_full(sym: str):
-    try:
-        df = yf.download(sym, period="1y", interval="1d", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 10:
-            return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        close = df["Close"].dropna()
-        if isinstance(close, pd.DataFrame):
-            close = close.iloc[:, 0]
-        latest = float(close.iloc[-1])
-        prev   = float(close.iloc[-2])
-
-        def _back(n):
-            idx = max(0, len(close) - n)
-            return float(close.iloc[idx])
-
-        d1d = (latest - prev) / prev * 100
-        d1m = (latest / _back(22) - 1) * 100 if len(close) >= 22 else 0
-        d1y = (latest / _back(252) - 1) * 100 if len(close) >= 252 else 0
-        ytd = (latest / _back(75) - 1) * 100 if len(close) >= 75 else 0
-
-        hi  = df["High"].dropna()
-        lo  = df["Low"].dropna()
-        if isinstance(hi, pd.DataFrame): hi = hi.iloc[:, 0]
-        if isinstance(lo, pd.DataFrame): lo = lo.iloc[:, 0]
-        atr = float((hi - lo).rolling(14).mean().iloc[-1])
-        atr_pct = atr / latest * 100
-
-        delta = close.diff()
-        gain  = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
-        loss  = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-        rsi_v = float(100 - 100 / (1 + gain.iloc[-1] / max(loss.iloc[-1], 1e-9)))
-
-        ema20 = float(close.ewm(span=20).mean().iloc[-1])
-        ema50 = float(close.ewm(span=50).mean().iloc[-1]) if len(close) >= 50 else ema20
-
-        hi52  = float(hi.tail(252).max())
-        lo52  = float(lo.tail(252).min())
-        pos52 = (latest - lo52) / (hi52 - lo52) * 100 if hi52 != lo52 else 50
-
-        trend = 35 if latest > ema20 > ema50 else (20 if latest > ema20 else 5)
-        mom   = (30 if 50 < rsi_v < 70 else 20 if 40 < rsi_v <= 50 else
-                 25 if 70 <= rsi_v < 80 else 10)
-        vol_s = 35 if atr_pct < 2 else (25 if atr_pct < 4 else 15)
-        score = min(100, max(0, trend + mom + vol_s))
-        label = "buy" if score >= 70 else ("watch" if score >= 45 else "avoid")
-
-        return {
-            "sym": sym, "price": latest,
-            "1d": d1d, "1m": d1m, "1y": d1y, "ytd": ytd,
-            "atr_pct": round(atr_pct, 2),
-            "rsi": round(rsi_v, 1),
-            "ema20": round(ema20, 2), "ema50": round(ema50, 2),
-            "hi52": round(hi52, 2), "lo52": round(lo52, 2),
-            "pos52": round(pos52, 1),
-            "score": score, "label": label,
-            "history": close.tail(252).tolist(),
-        }
-    except Exception:
-        return None
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_ohlcv_period(sym: str, period: str = "3mo") -> pd.DataFrame:
-    try:
-        df = yf.download(sym, period=period, interval="1d", progress=False, auto_adjust=True)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        return df.dropna()
-    except Exception:
-        return pd.DataFrame()
-
-
-def make_candlestick_fig(df: pd.DataFrame, sym: str, height: int = 320):
-    from plotly.subplots import make_subplots
-    th = get_theme()
-    if df.empty:
-        return go.Figure()
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        row_heights=[0.72, 0.28], vertical_spacing=0.03)
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df["Open"], high=df["High"],
-        low=df["Low"], close=df["Close"],
-        increasing_line_color=th["green"], increasing_fillcolor=th["green"],
-        decreasing_line_color=th["red"],   decreasing_fillcolor=th["red"],
-        name=sym, line_width=1,
-    ), row=1, col=1)
-    if len(df) >= 20:
-        fig.add_trace(go.Scatter(x=df.index, y=df["Close"].ewm(span=20).mean(),
-            line=dict(color=th["orange"], width=1.5), name="EMA20"), row=1, col=1)
-    if len(df) >= 50:
-        fig.add_trace(go.Scatter(x=df.index, y=df["Close"].ewm(span=50).mean(),
-            line=dict(color=th["purple"], width=1.2, dash="dot"), name="EMA50"), row=1, col=1)
-    if "Volume" in df.columns:
-        vcols = [th["green"] if df["Close"].iloc[i] >= df["Open"].iloc[i]
-                 else th["red"] for i in range(len(df))]
-        fig.add_trace(go.Bar(x=df.index, y=df["Volume"],
-            marker_color=vcols, showlegend=False), row=2, col=1)
-    ax = dict(showgrid=True, gridcolor=th["chart_grid"],
-              showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
-    fig.update_layout(
-        paper_bgcolor=th["card"], plot_bgcolor=th["card"],
-        height=height, margin=dict(l=8, r=8, t=8, b=8),
-        xaxis=dict(**ax, rangeslider_visible=False), xaxis2=dict(**ax),
-        yaxis=dict(**ax), yaxis2=dict(**ax, tickformat=".2s"),
-        legend=dict(font=dict(size=10, color=th["chart_tick"]),
-                    bgcolor="rgba(0,0,0,0)", orientation="h",
-                    yanchor="bottom", y=1.01, xanchor="left", x=0),
-        font=dict(family="Inter"), hovermode="x unified",
-    )
-    return fig
-
-
-def make_perf_fig(histories: dict, height: int = 260):
-    th = get_theme()
-    palette = [th["green"], th["red"], th["blue"], th["orange"],
-               th["purple"], "#00c9ff", "#ff8c00", "#e040fb"]
-    fig = go.Figure()
-    for i, (name, prices) in enumerate(histories.items()):
-        if not prices or len(prices) < 2 or prices[0] == 0:
-            continue
-        norm = [p / prices[0] * 100 for p in prices]
-        fig.add_trace(go.Scatter(y=norm, mode="lines", name=name,
-            line=dict(color=palette[i % len(palette)], width=2),
-            hovertemplate=f"{name}: %{{y:.1f}}<extra></extra>"))
-    fig.add_hline(y=100, line_dash="dash", line_color=th["chart_tick"], line_width=0.8)
-    ax = dict(showgrid=True, gridcolor=th["chart_grid"],
-              showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
-    fig.update_layout(
-        paper_bgcolor=th["card"], plot_bgcolor=th["card"],
-        height=height, margin=dict(l=8, r=8, t=8, b=8),
-        xaxis=dict(**ax, showticklabels=False), yaxis=dict(**ax),
-        legend=dict(font=dict(size=10, color=th["chart_tick"]),
-                    bgcolor="rgba(0,0,0,0)", orientation="h"),
-        font=dict(family="Inter"), hovermode="x unified",
-    )
-    return fig
-
-
-def make_bar_fig(names: list, vals: list, height: int = 240):
-    th = get_theme()
-    colors = [th["green"] if v >= 0 else th["red"] for v in vals]
-    fig = go.Figure(go.Bar(
-        x=names, y=vals, marker_color=colors, marker_cornerradius=4,
-        text=[f"{v:+.1f}%" for v in vals], textposition="outside",
-        textfont=dict(size=10, color=th["chart_tick"]),
-    ))
-    ax = dict(showgrid=True, gridcolor=th["chart_grid"],
-              showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
-    fig.update_layout(
-        paper_bgcolor=th["card"], plot_bgcolor=th["card"],
-        height=height, margin=dict(l=8, r=8, t=8, b=55),
-        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=th["chart_tick"]), tickangle=35),
-        yaxis=dict(**ax, ticksuffix="%",
-                   zeroline=True, zerolinecolor=th["chart_tick"], zerolinewidth=0.5),
-        showlegend=False, font=dict(family="Inter"),
-    )
-    return fig
-
-
-def sec_title(txt: str) -> str:
-    th = get_theme()
-    return (f'<div style="font-size:14px;font-weight:600;color:{th["text1"]};'
-            f'margin-bottom:12px">{txt}</div>')
-
-
-def lock_msg() -> None:
-    th = get_theme()
     st.markdown(
-        f'<div style="text-align:center;padding:32px;background:{th["card2"]};'
-        f'border-radius:12px;border:1px solid {th["border"]};margin:8px 0">'
-        f'<div style="font-size:28px;margin-bottom:10px">🔒</div>'
-        f'<div style="font-size:14px;color:{th["text2"]};margin-bottom:6px">Pro 專屬功能</div>'
-        f'<div style="font-size:12px;color:{th["text3"]}">升級 Pro 解鎖全部功能</div>'
-        f'</div>',
+        f'<div style="display:flex;align-items:center;justify-content:space-between;'
+        f'flex-wrap:wrap;gap:10px;margin-bottom:18px">'
+        f'<div>'
+        f'<div style="font-size:22px;font-weight:700;color:{th["text1"]};letter-spacing:-.5px">'
+        f'{t("app_title")}</div>'
+        f'<div style="font-size:12px;color:{th["text3"]};margin-top:3px">'
+        f'{t("last_update")} {now} London · {t("data_source")}</div>'
+        f'</div>'
+        f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+        f'<div style="display:flex;align-items:center;gap:6px;background:{th["card"]};'
+        f'border:1px solid {th["border"]};border-radius:9px;padding:6px 12px;font-size:12px;color:{th["text2"]}">'
+        f'<span style="width:7px;height:7px;border-radius:50%;background:{us_col};flex-shrink:0"></span>{us_lbl}</div>'
+        f'<div style="display:flex;align-items:center;gap:6px;background:{th["card"]};'
+        f'border:1px solid {th["border"]};border-radius:9px;padding:6px 12px;font-size:12px;color:{th["text2"]}">'
+        f'<span style="width:7px;height:7px;border-radius:50%;background:{hk_col};flex-shrink:0"></span>{hk_lbl}</div>'
+        f'</div></div>',
         unsafe_allow_html=True,
     )
 
 
-def is_pro() -> bool:
-    return st.session_state.get("role", "free") in ("pro", "admin")
+# ═══════════════════════════════════════════════════════════════════
+#   MAIN APP ROUTER
+# ═══════════════════════════════════════════════════════════════════
+def main():
+    # Session defaults
+    for k, v in [("theme", "dark"), ("lang", "zh-hant"), ("font_size", "md"),
+                  ("logged_in", False), ("ai_calls_today", 0)]:
+        if k not in st.session_state:
+            st.session_state[k] = v
 
+    # Login page (no sidebar)
+    if not st.session_state.get("logged_in"):
+        render_login()
+        return
 
-def groq_call(prompt: str, sys_msg: str = "") -> str:
-    import requests as _req
-    try:
-        key = st.secrets["groq"]["api_key"]
-    except Exception:
-        return "⚠️ 請在 Streamlit Secrets 設定 Groq API Key（groq.api_key）"
-    lang = st.session_state.get("lang", "zh-hant")
-    lang_inst = {"zh-hant": "請用繁體中文回答。",
-                 "zh-hans": "请用简体中文回答。",
-                 "en": "Please respond in English."}.get(lang, "請用繁體中文回答。")
-    system = sys_msg or f"你是一位專業股票市場分析師。{lang_inst}"
-    model = "llama-3.3-70b-versatile" if is_pro() else "llama-3.1-8b-instant"
-    try:
-        r = _req.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": model, "max_tokens": 1024, "temperature": 0.3,
-                  "messages": [{"role": "system", "content": system},
-                                {"role": "user", "content": prompt}]},
-            timeout=30,
+    # Inject CSS EVERY rerun so font-size + theme changes take effect immediately
+    inject_css()
+
+    # Sidebar (left nav)
+    render_sidebar()
+
+    # Slim topbar inside main content
+    render_main_topbar()
+
+    # Eye-care banner
+    if st.session_state.get("theme") == "eye":
+        th = get_theme()
+        st.markdown(
+            f'<div style="background:rgba(90,180,120,0.10);border:1px solid rgba(90,180,120,0.20);'
+            f'border-radius:9px;padding:8px 14px;font-size:12px;color:#8ab898;'
+            f'margin-bottom:12px;display:flex;align-items:center;gap:8px">'
+            f'🍃 {t("eye_banner")}</div>',
+            unsafe_allow_html=True,
         )
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"⚠️ AI 分析失敗: {str(e)[:120]}"
 
-
-def send_telegram_msg(chat_id: str, text: str) -> bool:
-    import requests as _req
+    # Expiry warning
     try:
-        tok = st.secrets["telegram"]["bot_token"]
-        r = _req.post(f"https://api.telegram.org/bot{tok}/sendMessage",
-                      json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-                      timeout=10)
-        return r.status_code == 200
+        exp = datetime.strptime(
+            st.session_state.get("expiry_date", "2099-12-31"), "%Y-%m-%d").date()
+        days_left = (exp - datetime.now().date()).days
+        if 0 < days_left <= 7 and st.session_state.get("role") == "pro":
+            th = get_theme()
+            st.markdown(
+                f'<div style="background:{th["orange"]}15;border:1px solid {th["orange"]}30;'
+                f'border-radius:9px;padding:8px 14px;font-size:12px;color:{th["orange"]};'
+                f'margin-bottom:12px">⚠️ {t("expiry_warn").format(days_left)}</div>',
+                unsafe_allow_html=True,
+            )
     except Exception:
-        return False
+        pass
+
+    # Tab navigation
+    tabs_config = [
+        ("global",    t("nav_global"),    "📊"),
+        ("watchlist", t("nav_watchlist"), "⭐"),
+        ("ai",        t("nav_ai"),        "🤖"),
+        ("portfolio", t("nav_portfolio"), "💼"),
+        ("journal",   t("nav_journal"),   "📓"),
+        ("learn",     t("nav_learn"),     "📚"),
+        ("settings",  t("nav_settings"),  "⚙️"),
+    ]
+    if st.session_state.get("role") == "admin":
+        tabs_config.append(("admin", t("nav_admin"), "👑"))
+
+    tab_labels  = [f"{cfg[2]} {cfg[1]}" for cfg in tabs_config]
+    tab_objects = st.tabs(tab_labels)
+
+    with tab_objects[0]: tab_global_market()
+    with tab_objects[1]: tab_watchlist()
+    with tab_objects[2]: tab_ai()
+    with tab_objects[3]: tab_portfolio()
+    with tab_objects[4]: tab_journal()
+    with tab_objects[5]: tab_learn()
+    with tab_objects[6]: tab_settings()
+    if st.session_state.get("role") == "admin" and len(tab_objects) > 7:
+        with tab_objects[7]: tab_admin()
+
+    th = get_theme()
+    st.markdown(
+        f'<div style="text-align:center;color:{th["text3"]};font-size:11px;'
+        f'margin-top:24px;padding-bottom:16px">'
+        f'數據僅供參考，不構成投資建議 · MarketIQ v1.1</div>',
+        unsafe_allow_html=True,
+    )
+
+
 
 
 # ═══════════════════════════════════════════════════════════════════
-#   TAB 2 — WATCHLIST ANALYSIS
+#   TAB 1 — GLOBAL MARKET MONITOR
 # ═══════════════════════════════════════════════════════════════════
+def tab_global_market():
+    th = get_theme()
+    with st.spinner(t('loading')):
+        kpi = fetch_kpi_data()
+
+
+        kpi_cols = st.columns(4)
+        kpi_configs = [
+            ("sp500", t("sp500"), "green", t("today")),
+            ("nasdaq", t("nasdaq"), "blue", t("today")),
+            ("vix", t("vix"), "orange", t("low_vol")),
+            ("gold", t("gold"), "purple", t("flat")),
+        ]
+        for col, (key, label, color, note) in zip(kpi_cols, kpi_configs):
+            with col:
+                d = kpi.get(key)
+                if d:
+                    val_str = fmt_num(d["value"], decimals=1 if key in ("vix", "gold") else 0)
+                    if key in ("sp500", "nasdaq"):
+                        val_str = fmt_num(d["value"], 0)
+                    st.markdown(
+                        render_kpi_card(label, val_str, d["change"], color, d["spark"], note),
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        render_kpi_card(label, "—", 0, color, [], note),
+                        unsafe_allow_html=True
+                    )
+
+        st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
+
+        # ── MID ROW: Sector Chart + Heatmap ──
+        mid_col1, mid_col2 = st.columns([1.7, 1])
+
+        sector_data = fetch_sector_data("1m")
+
+        with mid_col1:
+            st.markdown(f"""
+            <div class="ds-card">
+              <div class="card-hd">
+                <div>
+                  <div class="card-title">{t('sector_compare')}</div>
+                  <div class="card-sub">{t('sector_sub')}</div>
+                </div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Plotly bar chart
+            sorted_sectors = sorted(sector_data.items(), key=lambda x: x[1], reverse=True)
+            names = [s[0] for s in sorted_sectors]
+            values = [s[1] for s in sorted_sectors]
+            colors = [th["green"] if v >= 0 else th["red"] for v in values]
+
+            fig = go.Figure(go.Bar(
+                x=names, y=values,
+                marker_color=colors,
+                marker_line_color=colors,
+                marker_line_width=1.5,
+                text=[fmt_pct(v, 1) for v in values],
+                textposition="outside",
+                textfont=dict(size=10, color=th["text2"], family="Inter"),
+            ))
+            fig.update_layout(
+                paper_bgcolor=th["card"],
+                plot_bgcolor=th["card"],
+                height=200,
+                margin=dict(l=10, r=10, t=10, b=40),
+                showlegend=False,
+                xaxis=dict(
+                    showgrid=False,
+                    tickfont=dict(size=10, color=th["chart_tick"], family="Inter"),
+                    tickangle=-30,
+                ),
+                yaxis=dict(
+                    gridcolor=th["chart_grid"],
+                    tickfont=dict(size=10, color=th["chart_tick"], family="Inter"),
+                    ticksuffix="%",
+                    zeroline=True,
+                    zerolinecolor=th["border"],
+                ),
+                font=dict(family="Noto Sans HK, Inter"),
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        with mid_col2:
+            # Sort sectors by value descending for heatmap
+            sorted_for_hm = sorted(sector_data.items(), key=lambda x: x[1], reverse=True)
+            max_abs = max(abs(v) for _, v in sorted_for_hm) if sorted_for_hm else 1
+
+            st.markdown(
+                f'<div class="ds-card"><div class="card-hd">'
+                f'<div class="card-title">{t("sector_heatmap")}</div></div>'
+                f'<div class="hm-grid">',
+                unsafe_allow_html=True,
+            )
+
+            for name, val in sorted_for_hm[:8]:
+                pct_w = round(abs(val) / max_abs * 100, 1)
+                bar_col = th["green"] if val >= 0 else th["red"]
+                txt_col = th["green"] if val >= 0 else th["red"]
+                val_str = fmt_pct(val, 1)
+                st.markdown(
+                    f'<div class="hm-row">'
+                    f'<span class="hm-name">{name}</span>'
+                    f'<div class="hm-bar-w">'
+                    f'<div class="hm-bar" style="width:{pct_w}%;background:{bar_col}"></div>'
+                    f'</div>'
+                    f'<span class="hm-val" style="color:{txt_col}">{val_str}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+        st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
+
+        # ── BOTTOM ROW: Watchlist + Regime + VIX ──
+        bot_col1, bot_col2, bot_col3 = st.columns(3)
+
+        # Default watchlist
+        default_watchlist = ["TSLA", "NVDA", "AAPL", "META", "AMZN"]
+        signals = fetch_watchlist_signals(default_watchlist)
+
+        with bot_col1:
+            sig_parts = []
+            for s in signals:
+                sc = s["score"]
+                if sc >= 70:
+                    badge_cls = "b-buy"
+                    badge_txt = t("buy")
+                    dot_color = th["green"]
+                    sc_color = th["green"]
+                    glow = f"box-shadow:0 0 5px {th['green']}"
+                elif sc >= 45:
+                    badge_cls = "b-watch"
+                    badge_txt = t("watch")
+                    dot_color = th["orange"]
+                    sc_color = th["orange"]
+                    glow = ""
+                else:
+                    badge_cls = "b-avoid"
+                    badge_txt = t("avoid")
+                    dot_color = th["red"]
+                    sc_color = th["red"]
+                    glow = f"box-shadow:0 0 5px {th['red']}"
+
+                price_str = f"{s['price']:.2f}"
+                sig_parts.append(
+                    f'<div class="si-row">'
+                    f'<div class="si-l">'
+                    f'<span class="si-dot" style="background:{dot_color};{glow}"></span>'
+                    f'<span class="si-tk">{s["ticker"]}</span>'
+                    f'<span class="si-pr">${price_str}</span>'
+                    f'</div>'
+                    f'<div class="si-r">'
+                    f'<span class="si-sc" style="color:{sc_color}">{sc}</span>'
+                    f'<span class="badge {badge_cls}">{badge_txt}</span>'
+                    f'</div>'
+                    f'</div>'
+                )
+            sig_inline = "".join(sig_parts)
+            wl_title = t("watchlist_signals")
+            entry_lbl = t("entry_score")
+            st.markdown(
+                f'<div class="ds-card">'
+                f'<div class="card-hd">'
+                f'<div class="card-title">{wl_title}</div>'
+                f'<span class="card-pill">{entry_lbl}</span>'
+                f'</div>'
+                f'{sig_inline}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        with bot_col2:
+            regime = compute_market_regime()
+            if regime:
+                regime_label = t(regime["regime"])
+                regime_color = {"green": th["green"], "red": th["red"],
+                              "orange": th["orange"], "blue": th["blue"]}.get(regime["color"], th["green"])
+
+                mom_v = regime["momentum"]
+                bre_v = regime["breadth"]
+                sen_v = regime["sentiment"]
+                vol_v = regime["volatility"]
+                vix_v = f"{regime['vix']:.1f}"
+                reg_title  = t("market_regime")
+                cur_state  = t("current_state")
+                mom_lbl    = t("momentum")
+                bre_lbl    = t("breadth")
+                sen_lbl    = t("sentiment")
+                vol_lbl    = t("volatility")
+                ai_lbl     = t("ai_advice")
+                ai_txt     = t("ai_advice_text")
+
+                st.markdown(
+                    f'<div class="ds-card">'
+                    f'<div class="card-hd"><div class="card-title">{reg_title}</div></div>'
+                    f'<div class="regime-state-lbl">{cur_state}</div>'
+                    f'<div class="regime-val" style="color:{regime_color}">{regime_label}</div>'
+                    f'<div class="reg-bar">'
+                    f'<div class="reg-bar-hd"><span>{mom_lbl}</span>'
+                    f'<span style="color:{th["green"]}">{mom_v} / 100</span></div>'
+                    f'<div class="reg-bar-track">'
+                    f'<div class="reg-bar-fill" style="width:{mom_v}%;background:{th["green"]}"></div>'
+                    f'</div></div>'
+                    f'<div class="reg-bar">'
+                    f'<div class="reg-bar-hd"><span>{bre_lbl}</span>'
+                    f'<span style="color:{th["blue"]}">{bre_v} / 100</span></div>'
+                    f'<div class="reg-bar-track">'
+                    f'<div class="reg-bar-fill" style="width:{bre_v}%;background:{th["blue"]}"></div>'
+                    f'</div></div>'
+                    f'<div class="reg-bar">'
+                    f'<div class="reg-bar-hd"><span>{sen_lbl}</span>'
+                    f'<span style="color:{th["orange"]}">{sen_v} / 100</span></div>'
+                    f'<div class="reg-bar-track">'
+                    f'<div class="reg-bar-fill" style="width:{sen_v}%;background:{th["orange"]}"></div>'
+                    f'</div></div>'
+                    f'<div class="reg-bar">'
+                    f'<div class="reg-bar-hd"><span>{vol_lbl}</span>'
+                    f'<span style="color:{th["green"]}">VIX {vix_v}</span></div>'
+                    f'<div class="reg-bar-track">'
+                    f'<div class="reg-bar-fill" style="width:{vol_v}%;background:{th["green"]}"></div>'
+                    f'</div></div>'
+                    f'<div class="ai-tip">'
+                    f'<div class="ai-tip-l">{ai_lbl}</div>'
+                    f'<div class="ai-tip-t">{ai_txt}</div>'
+                    f'</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        with bot_col3:
+            vix_term = fetch_vix_term()
+            vix_9d = vix_term.get("9D")
+            vix_spot = vix_term.get("VIX")
+            vix_3m = vix_term.get("3M")
+            vix_6m = vix_term.get("6M")
+
+            vix_vals = [v or 20 for v in [vix_9d, vix_spot, vix_3m, vix_6m]]
+            max_v = max(vix_vals) if vix_vals else 30
+            bar_heights = [(v / max_v * 100) if max_v else 0 for v in vix_vals]
+
+            # Determine contango or backwardation
+            is_contango = (vix_6m or 0) > (vix_spot or 0)
+            contango_text = t("contango_text") if is_contango else t("backwardation_text")
+
+            bar_colors = [th["blue"], th["blue"], "#8880e8", th["purple"]]
+            labels = ["9D", "VIX", "3M", "6M"]
+
+            # Build bars HTML inline - avoid variable embedding issue
+            bars_parts = []
+            for h, c, lbl in zip(bar_heights, bar_colors, labels):
+                h_r = round(h, 1)
+                bars_parts.append(
+                    f'<div class="vix-bar-c">'
+                    f'<div class="vix-bar" style="height:{h_r}%;background:{c}"></div>'
+                    f'<div class="vix-bar-l">{lbl}</div>'
+                    f'</div>'
+                )
+            bars_inline = "".join(bars_parts)
+
+            row_data = [
+                ("VIX 9D", vix_9d, th["green"] if vix_9d and vix_9d < 18 else th["text1"]),
+                (t("vix_spot"), vix_spot, th["orange"] if vix_spot and vix_spot > 18 else th["text1"]),
+                ("VIX 3M", vix_3m, th["text1"]),
+                ("VIX 6M", vix_6m, th["text1"]),
+            ]
+            rows_parts = []
+            for label, val, color in row_data:
+                val_str = f"{val:.1f}" if val else "—"
+                rows_parts.append(
+                    f'<div class="vix-row">'
+                    f'<span class="vrt">{label}</span>'
+                    f'<span class="vrv" style="color:{color}">{val_str}</span>'
+                    f'</div>'
+                )
+            rows_inline = "".join(rows_parts)
+
+            vix_title = t("vix_term")
+            st.markdown(
+                f'<div class="ds-card">'
+                f'<div class="card-hd"><div class="card-title">{vix_title}</div></div>'
+                f'<div class="vix-curve">{bars_inline}</div>'
+                f'<div>{rows_inline}</div>'
+                f'<div class="ctag">{contango_text}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+
+
+    # ═══════════════════════════════════════════════════════════════════
+    #   DATA HELPERS FOR ALL TABS
+    # ═══════════════════════════════════════════════════════════════════
+    @st.cache_data(ttl=300, show_spinner=False)
+    def fetch_ticker_full(sym: str):
+        try:
+            df = yf.download(sym, period="1y", interval="1d", progress=False, auto_adjust=True)
+            if df.empty or len(df) < 10:
+                return None
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            close = df["Close"].dropna()
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
+            latest = float(close.iloc[-1])
+            prev   = float(close.iloc[-2])
+
+            def _back(n):
+                idx = max(0, len(close) - n)
+                return float(close.iloc[idx])
+
+            d1d = (latest - prev) / prev * 100
+            d1m = (latest / _back(22) - 1) * 100 if len(close) >= 22 else 0
+            d1y = (latest / _back(252) - 1) * 100 if len(close) >= 252 else 0
+            ytd = (latest / _back(75) - 1) * 100 if len(close) >= 75 else 0
+
+            hi  = df["High"].dropna()
+            lo  = df["Low"].dropna()
+            if isinstance(hi, pd.DataFrame): hi = hi.iloc[:, 0]
+            if isinstance(lo, pd.DataFrame): lo = lo.iloc[:, 0]
+            atr = float((hi - lo).rolling(14).mean().iloc[-1])
+            atr_pct = atr / latest * 100
+
+            delta = close.diff()
+            gain  = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
+            loss  = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+            rsi_v = float(100 - 100 / (1 + gain.iloc[-1] / max(loss.iloc[-1], 1e-9)))
+
+            ema20 = float(close.ewm(span=20).mean().iloc[-1])
+            ema50 = float(close.ewm(span=50).mean().iloc[-1]) if len(close) >= 50 else ema20
+
+            hi52  = float(hi.tail(252).max())
+            lo52  = float(lo.tail(252).min())
+            pos52 = (latest - lo52) / (hi52 - lo52) * 100 if hi52 != lo52 else 50
+
+            trend = 35 if latest > ema20 > ema50 else (20 if latest > ema20 else 5)
+            mom   = (30 if 50 < rsi_v < 70 else 20 if 40 < rsi_v <= 50 else
+                     25 if 70 <= rsi_v < 80 else 10)
+            vol_s = 35 if atr_pct < 2 else (25 if atr_pct < 4 else 15)
+            score = min(100, max(0, trend + mom + vol_s))
+            label = "buy" if score >= 70 else ("watch" if score >= 45 else "avoid")
+
+            return {
+                "sym": sym, "price": latest,
+                "1d": d1d, "1m": d1m, "1y": d1y, "ytd": ytd,
+                "atr_pct": round(atr_pct, 2),
+                "rsi": round(rsi_v, 1),
+                "ema20": round(ema20, 2), "ema50": round(ema50, 2),
+                "hi52": round(hi52, 2), "lo52": round(lo52, 2),
+                "pos52": round(pos52, 1),
+                "score": score, "label": label,
+                "history": close.tail(252).tolist(),
+            }
+        except Exception:
+            return None
+
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def fetch_ohlcv_period(sym: str, period: str = "3mo") -> pd.DataFrame:
+        try:
+            df = yf.download(sym, period=period, interval="1d", progress=False, auto_adjust=True)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            return df.dropna()
+        except Exception:
+            return pd.DataFrame()
+
+
+    def make_candlestick_fig(df: pd.DataFrame, sym: str, height: int = 320):
+        from plotly.subplots import make_subplots
+        th = get_theme()
+        if df.empty:
+            return go.Figure()
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                            row_heights=[0.72, 0.28], vertical_spacing=0.03)
+        fig.add_trace(go.Candlestick(
+            x=df.index, open=df["Open"], high=df["High"],
+            low=df["Low"], close=df["Close"],
+            increasing_line_color=th["green"], increasing_fillcolor=th["green"],
+            decreasing_line_color=th["red"],   decreasing_fillcolor=th["red"],
+            name=sym, line_width=1,
+        ), row=1, col=1)
+        if len(df) >= 20:
+            fig.add_trace(go.Scatter(x=df.index, y=df["Close"].ewm(span=20).mean(),
+                line=dict(color=th["orange"], width=1.5), name="EMA20"), row=1, col=1)
+        if len(df) >= 50:
+            fig.add_trace(go.Scatter(x=df.index, y=df["Close"].ewm(span=50).mean(),
+                line=dict(color=th["purple"], width=1.2, dash="dot"), name="EMA50"), row=1, col=1)
+        if "Volume" in df.columns:
+            vcols = [th["green"] if df["Close"].iloc[i] >= df["Open"].iloc[i]
+                     else th["red"] for i in range(len(df))]
+            fig.add_trace(go.Bar(x=df.index, y=df["Volume"],
+                marker_color=vcols, showlegend=False), row=2, col=1)
+        ax = dict(showgrid=True, gridcolor=th["chart_grid"],
+                  showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
+        fig.update_layout(
+            paper_bgcolor=th["card"], plot_bgcolor=th["card"],
+            height=height, margin=dict(l=8, r=8, t=8, b=8),
+            xaxis=dict(**ax, rangeslider_visible=False), xaxis2=dict(**ax),
+            yaxis=dict(**ax), yaxis2=dict(**ax, tickformat=".2s"),
+            legend=dict(font=dict(size=10, color=th["chart_tick"]),
+                        bgcolor="rgba(0,0,0,0)", orientation="h",
+                        yanchor="bottom", y=1.01, xanchor="left", x=0),
+            font=dict(family="Inter"), hovermode="x unified",
+        )
+        return fig
+
+
+    def make_perf_fig(histories: dict, height: int = 260):
+        th = get_theme()
+        palette = [th["green"], th["red"], th["blue"], th["orange"],
+                   th["purple"], "#00c9ff", "#ff8c00", "#e040fb"]
+        fig = go.Figure()
+        for i, (name, prices) in enumerate(histories.items()):
+            if not prices or len(prices) < 2 or prices[0] == 0:
+                continue
+            norm = [p / prices[0] * 100 for p in prices]
+            fig.add_trace(go.Scatter(y=norm, mode="lines", name=name,
+                line=dict(color=palette[i % len(palette)], width=2),
+                hovertemplate=f"{name}: %{{y:.1f}}<extra></extra>"))
+        fig.add_hline(y=100, line_dash="dash", line_color=th["chart_tick"], line_width=0.8)
+        ax = dict(showgrid=True, gridcolor=th["chart_grid"],
+                  showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
+        fig.update_layout(
+            paper_bgcolor=th["card"], plot_bgcolor=th["card"],
+            height=height, margin=dict(l=8, r=8, t=8, b=8),
+            xaxis=dict(**ax, showticklabels=False), yaxis=dict(**ax),
+            legend=dict(font=dict(size=10, color=th["chart_tick"]),
+                        bgcolor="rgba(0,0,0,0)", orientation="h"),
+            font=dict(family="Inter"), hovermode="x unified",
+        )
+        return fig
+
+
+    def make_bar_fig(names: list, vals: list, height: int = 240):
+        th = get_theme()
+        colors = [th["green"] if v >= 0 else th["red"] for v in vals]
+        fig = go.Figure(go.Bar(
+            x=names, y=vals, marker_color=colors, marker_cornerradius=4,
+            text=[f"{v:+.1f}%" for v in vals], textposition="outside",
+            textfont=dict(size=10, color=th["chart_tick"]),
+        ))
+        ax = dict(showgrid=True, gridcolor=th["chart_grid"],
+                  showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
+        fig.update_layout(
+            paper_bgcolor=th["card"], plot_bgcolor=th["card"],
+            height=height, margin=dict(l=8, r=8, t=8, b=55),
+            xaxis=dict(showgrid=False, tickfont=dict(size=10, color=th["chart_tick"]), tickangle=35),
+            yaxis=dict(**ax, ticksuffix="%",
+                       zeroline=True, zerolinecolor=th["chart_tick"], zerolinewidth=0.5),
+            showlegend=False, font=dict(family="Inter"),
+        )
+        return fig
+
+
+    def sec_title(txt: str) -> str:
+        th = get_theme()
+        return (f'<div style="font-size:14px;font-weight:600;color:{th["text1"]};'
+                f'margin-bottom:12px">{txt}</div>')
+
+
+    def lock_msg() -> None:
+        th = get_theme()
+        st.markdown(
+            f'<div style="text-align:center;padding:32px;background:{th["card2"]};'
+            f'border-radius:12px;border:1px solid {th["border"]};margin:8px 0">'
+            f'<div style="font-size:28px;margin-bottom:10px">🔒</div>'
+            f'<div style="font-size:14px;color:{th["text2"]};margin-bottom:6px">Pro 專屬功能</div>'
+            f'<div style="font-size:12px;color:{th["text3"]}">升級 Pro 解鎖全部功能</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
+    def is_pro() -> bool:
+        return st.session_state.get("role", "free") in ("pro", "admin")
+
+
+    def groq_call(prompt: str, sys_msg: str = "") -> str:
+        import requests as _req
+        try:
+            key = st.secrets["groq"]["api_key"]
+        except Exception:
+            return "⚠️ 請在 Streamlit Secrets 設定 Groq API Key（groq.api_key）"
+        lang = st.session_state.get("lang", "zh-hant")
+        lang_inst = {"zh-hant": "請用繁體中文回答。",
+                     "zh-hans": "请用简体中文回答。",
+                     "en": "Please respond in English."}.get(lang, "請用繁體中文回答。")
+        system = sys_msg or f"你是一位專業股票市場分析師。{lang_inst}"
+        model = "llama-3.3-70b-versatile" if is_pro() else "llama-3.1-8b-instant"
+        try:
+            r = _req.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": model, "max_tokens": 1024, "temperature": 0.3,
+                      "messages": [{"role": "system", "content": system},
+                                    {"role": "user", "content": prompt}]},
+                timeout=30,
+            )
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"⚠️ AI 分析失敗: {str(e)[:120]}"
+
+
+    def send_telegram_msg(chat_id: str, text: str) -> bool:
+        import requests as _req
+        try:
+            tok = st.secrets["telegram"]["bot_token"]
+            r = _req.post(f"https://api.telegram.org/bot{tok}/sendMessage",
+                          json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+                          timeout=10)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+
+    # ═══════════════════════════════════════════════════════════════════
+    #   TAB 2 — WATCHLIST ANALYSIS
+    # ═══════════════════════════════════════════════════════════════════
 def tab_watchlist():
     th = get_theme()
     st.markdown(sec_title("⭐ " + t("nav_watchlist")), unsafe_allow_html=True)
@@ -2721,51 +2854,6 @@ def tab_admin():
 # ═══════════════════════════════════════════════════════════════════
 #   MAIN APP ROUTER
 # ═══════════════════════════════════════════════════════════════════
-def main():
-    for k, v in [("theme","dark"),("lang","zh-hant"),("font_size","md"),
-                  ("logged_in",False),("ai_calls_today",0)]:
-        if k not in st.session_state:
-            st.session_state[k] = v
-
-    if not st.session_state.get("logged_in"):
-        render_login()
-        return
-
-    inject_css()
-    render_topbar()
-    render_controls()
-
-    tabs_config = [
-        ("global",    t("nav_global"),    "📊"),
-        ("watchlist", t("nav_watchlist"), "⭐"),
-        ("ai",        t("nav_ai"),        "🤖"),
-        ("portfolio", t("nav_portfolio"), "💼"),
-        ("journal",   t("nav_journal"),   "📓"),
-        ("learn",     t("nav_learn"),     "📚"),
-        ("settings",  t("nav_settings"),  "⚙️"),
-    ]
-    if st.session_state.get("role") == "admin":
-        tabs_config.append(("admin", t("nav_admin"), "👑"))
-
-    tab_labels  = [f"{cfg[2]} {cfg[1]}" for cfg in tabs_config]
-    tab_objects = st.tabs(tab_labels)
-
-    with tab_objects[0]: tab_global_market()
-    with tab_objects[1]: tab_watchlist()
-    with tab_objects[2]: tab_ai()
-    with tab_objects[3]: tab_portfolio()
-    with tab_objects[4]: tab_journal()
-    with tab_objects[5]: tab_learn()
-    with tab_objects[6]: tab_settings()
-    if st.session_state.get("role") == "admin" and len(tab_objects) > 7:
-        with tab_objects[7]: tab_admin()
-
-    st.markdown(
-        f'<div style="text-align:center;color:{get_theme()["text3"]};font-size:11px;margin-top:24px;padding-bottom:16px">'
-        f'{t("data_error")[0:0]}{t("loading")[0:0]}'
-        f'數據僅供參考，不構成投資建議 · MarketIQ v1.1</div>',
-        unsafe_allow_html=True,
-    )
 
 
 if __name__ == "__main__":
