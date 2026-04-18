@@ -359,6 +359,82 @@ def inject_css():
     #MainMenu, footer, header {{ visibility: hidden; }}
     .stDeployButton {{ display: none; }}
 
+    /* ── Fix expander _arrow overlap bug (all Streamlit versions) ── */
+    .streamlit-expanderHeader {{
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        color: {th['text1']} !important;
+        background: {th['card2']} !important;
+        border-radius: 9px !important;
+        padding: 10px 14px !important;
+        border: 1px solid {th['border']} !important;
+    }}
+    .streamlit-expanderHeader p {{
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        color: {th['text1']} !important;
+        margin: 0 !important;
+    }}
+    .streamlit-expanderContent {{
+        background: {th['card']} !important;
+        border: 1px solid {th['border']} !important;
+        border-top: none !important;
+        border-radius: 0 0 9px 9px !important;
+        padding: 14px !important;
+    }}
+    /* Hide _arrow text in newer Streamlit */
+    details > summary > span > div > p:first-child::before {{
+        content: none !important;
+        display: none !important;
+    }}
+    /* Target the _arrow span directly */
+    [data-testid="stExpander"] summary {{
+        list-style: none !important;
+    }}
+    [data-testid="stExpander"] summary::-webkit-details-marker {{
+        display: none !important;
+    }}
+    /* Streamlit 1.32+ expander label override */
+    [data-testid="stExpanderToggleIcon"] {{
+        display: none !important;
+    }}
+    details summary div[data-testid="stMarkdownContainer"] p {{
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        color: {th['text1']} !important;
+    }}
+
+    /* ── Sidebar toggle floating button ── */
+    .sb-toggle-btn {{
+        position: fixed;
+        top: 50%;
+        left: 240px;
+        transform: translateY(-50%);
+        z-index: 9999;
+        width: 22px;
+        height: 48px;
+        background: {th['card2']};
+        border: 1px solid {th['border']};
+        border-left: none;
+        border-radius: 0 8px 8px 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        color: {th['text3']};
+        font-size: 11px;
+        transition: all .2s;
+        user-select: none;
+    }}
+    .sb-toggle-btn:hover {{
+        background: {th['card']};
+        color: {th['text1']};
+        width: 26px;
+    }}
+    .sb-collapsed .sb-toggle-btn {{
+        left: 0;
+    }}
+
     /* ── SIDEBAR ── */
     section[data-testid="stSidebar"] {{
         background: {th['nav']} !important;
@@ -369,9 +445,13 @@ def inject_css():
     section[data-testid="stSidebar"] > div {{
         padding: 20px 16px !important;
     }}
-    /* Hide sidebar collapse arrow button */
+    /* Make native sidebar collapse button invisible but clickable for our toggle */
     button[data-testid="collapsedControl"] {{
-        display: none !important;
+        opacity: 0 !important;
+        width: 1px !important;
+        height: 1px !important;
+        position: absolute !important;
+        pointer-events: auto !important;
     }}
     /* Sidebar text color override */
     section[data-testid="stSidebar"] p,
@@ -1487,19 +1567,35 @@ def render_sidebar():
     region = st.session_state.get("region", "UK")
 
     with st.sidebar:
-        # ── Logo ──
-        st.markdown(
-            f'<div style="display:flex;align-items:center;gap:11px;'
-            f'padding:4px 0 20px;border-bottom:1px solid {th["nav_border"]};margin-bottom:18px">'
-            f'<div style="width:38px;height:38px;border-radius:10px;background:{th["green"]};'
-            f'display:flex;align-items:center;justify-content:center;flex-shrink:0">'
-            f'<svg width="20" height="20" viewBox="0 0 20 20" fill="none">'
-            f'<path d="M2 15L6 8.5l3.5 4.5 4-7L18 15H2z" fill="#111118"/></svg></div>'
-            f'<div><div style="font-size:15px;font-weight:700;color:#e8eaf8;letter-spacing:-.3px">MarketIQ</div>'
-            f'<div style="font-size:9px;color:{th["nav_text"]};letter-spacing:.6px">INTELLIGENCE DASHBOARD</div>'
-            f'</div></div>',
-            unsafe_allow_html=True,
-        )
+        # ── Sidebar toggle button (collapse/expand) ──
+        col_logo, col_toggle = st.columns([4, 1])
+        with col_logo:
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;padding:2px 0 16px">'
+                f'<div style="width:36px;height:36px;border-radius:10px;background:{th["green"]};'
+                f'display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+                f'<svg width="19" height="19" viewBox="0 0 20 20" fill="none">'
+                f'<path d="M2 15L6 8.5l3.5 4.5 4-7L18 15H2z" fill="#111118"/></svg></div>'
+                f'<div><div style="font-size:14px;font-weight:700;color:#e8eaf8">MarketIQ</div>'
+                f'<div style="font-size:9px;color:{th["nav_text"]};letter-spacing:.5px">INTELLIGENCE DASHBOARD</div>'
+                f'</div></div>',
+                unsafe_allow_html=True,
+            )
+        with col_toggle:
+            st.markdown("<div style='padding-top:4px'>", unsafe_allow_html=True)
+            if st.button("☰", key="sb_toggle", help="收起/展開側欄",
+                         use_container_width=True):
+                # Toggle sidebar via JavaScript
+                st.markdown("""
+                <script>
+                const sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
+                const btn = window.parent.document.querySelector('[data-testid="collapsedControl"]');
+                if(btn) btn.click();
+                </script>
+                """, unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown(f'<hr style="border:none;border-top:1px solid {th["nav_border"]};margin:0 0 14px">', unsafe_allow_html=True)
 
         # ── Market status ──
         status = market_status()
@@ -2286,7 +2382,7 @@ def tab_watchlist():
 
     # Saved portfolios (Pro)
     if is_pro():
-        with st.expander("📁 組合儲存"):
+        with st.expander("組合儲存"):
             portfolios = st.session_state.get("portfolios", {})
             for pname, ptk in portfolios.items():
                 pc1, pc2 = st.columns([4, 1])
@@ -2598,7 +2694,7 @@ def tab_portfolio():
 
     with ptabs[0]:
         positions = st.session_state.get("positions", [])
-        with st.expander("➕ 新增持倉"):
+        with st.expander("新增持倉"):
             pc1,pc2,pc3,pc4 = st.columns(4)
             with pc1: new_tk  = st.text_input("代碼", key="pos_tk", placeholder="TSLA")
             with pc2: new_qty = st.number_input("股數", min_value=1, value=100, key="pos_qty")
@@ -2658,7 +2754,7 @@ def tab_journal():
     jtabs = st.tabs(["📝 記錄交易", "📊 勝率統計", "🤖 AI 教練"])
 
     with jtabs[0]:
-        with st.expander("➕ 記錄新交易", expanded=True):
+        with st.expander("記錄新交易", expanded=True):
             j1,j2,j3 = st.columns(3)
             with j1:
                 jtk = st.text_input("代碼", key="j_tk", placeholder="TSLA")
@@ -2780,14 +2876,14 @@ def tab_settings():
 
     s1, s2 = st.columns(2, gap="medium")
     with s1:
-        with st.expander("📱 Telegram 推送設定"):
+        with st.expander("Telegram 推送設定"):
             tg_id_s = st.text_input("你的 Telegram Chat ID", key="tg_id_s", placeholder="123456789", help="Telegram 搜尋 @userinfobot 獲取")
             if st.button("🔔 測試推送", key="test_tg_s"):
                 if tg_id_s:
                     ok = send_telegram_msg(tg_id_s, f"✅ MarketIQ 推送測試成功！\n👤 {st.session_state.get('username','')}")
                     st.success("✅ 推送成功！" if ok else "❌ 推送失敗")
 
-        with st.expander("🔔 價格提示設定"):
+        with st.expander("價格提示設定"):
             wl_set = [s.strip().upper() for s in st.session_state.get("wl_tickers","TSLA,AAPL").split(",") if s.strip()][:5]
             alerts = st.session_state.get("price_alerts", {})
             for tk in wl_set:
@@ -2833,7 +2929,7 @@ def tab_admin():
     sheet = get_gsheet()
     if sheet is None:
         st.warning("Google Sheets 未連接，顯示本地測試數據")
-        with st.expander("🔍 連接診斷（點擊展開）", expanded=True):
+        with st.expander("連接診斷", expanded=True):
             debug_gsheet_connection()
         users_list = [{"username":k,"role":v["role"],"expiry_date":v.get("expiry_date","—"),"status":v.get("status","active"),"region":v.get("region","UK"),"ai_calls_today":0} for k,v in FALLBACK_USERS.items()]
     else:
@@ -2846,7 +2942,7 @@ def tab_admin():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    with st.expander("➕ 新增用戶"):
+    with st.expander("新增用戶"):
         ua1,ua2,ua3,ua4,ua5,ua6 = st.columns(6)
         with ua1: nu = st.text_input("用戶名", key="nu_adm")
         with ua2: np2 = st.text_input("密碼", type="password", key="np_adm")
@@ -2870,7 +2966,7 @@ def tab_admin():
         urows = "".join(f'<tr><td style="font-weight:600">{u.get("username","")}</td><td style="color:{"#f0a030" if u.get("role")=="admin" else th["green"] if u.get("role")=="pro" else th["text3"]};font-weight:600">{u.get("role","").upper()}</td><td>{u.get("expiry_date","—")}</td><td>{u.get("region","—")}</td><td style="font-family:Inter">{u.get("ai_calls_today",0)}</td><td style="color:{th["green"] if u.get("status","active")=="active" else th["red"]}">{u.get("status","active")}</td></tr>' for u in users_list)
         st.markdown(f'<div class="ds-card" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:2px solid {th["border"]}">'+"".join(f'<th style="padding:7px 10px;font-size:10px;color:{th["text3"]}">{h}</th>' for h in ["用戶名","角色","到期日","地區","今日AI","狀態"])+f'</tr></thead><tbody>{urows}</tbody></table></div>', unsafe_allow_html=True)
 
-    with st.expander("✏️ 快速編輯用戶"):
+    with st.expander("快速編輯用戶"):
         unames = [u.get("username","") for u in users_list]
         if unames:
             eu = st.selectbox("選擇用戶", unames, key="eu_adm")
