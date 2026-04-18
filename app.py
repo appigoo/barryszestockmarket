@@ -2262,7 +2262,8 @@ def tab_global_market():
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_ticker_full(sym: str):
     try:
-        df = yf.download(sym, period="1y", interval="1d", progress=False, auto_adjust=True)
+        # Use 2y to ensure enough data for 1y lookback
+        df = yf.download(sym, period="2y", interval="1d", progress=False, auto_adjust=True)
         if df.empty or len(df) < 10:
             return None
         if isinstance(df.columns, pd.MultiIndex):
@@ -2273,14 +2274,36 @@ def fetch_ticker_full(sym: str):
         latest = float(close.iloc[-1])
         prev   = float(close.iloc[-2])
 
+        # Find price N trading days ago (robust: use iloc from end)
         def _back(n):
-            idx = max(0, len(close) - n)
-            return float(close.iloc[idx])
+            pos = len(close) - n
+            if pos < 0:
+                pos = 0
+            return float(close.iloc[pos])
+
+        # Find 1-year-ago price by matching actual date (~252 trading days)
+        # More robust: use index date comparison
+        try:
+            from datetime import date, timedelta
+            target_1y = close.index[-1] - pd.DateOffset(years=1)
+            # Get closest date >= target_1y
+            mask_1y = close.index >= target_1y
+            price_1y_ago = float(close[mask_1y].iloc[0]) if mask_1y.any() else float(close.iloc[0])
+            d1y = (latest / price_1y_ago - 1) * 100 if price_1y_ago > 0 else 0
+        except Exception:
+            d1y = (latest / _back(252) - 1) * 100 if len(close) >= 252 else 0
+
+        # YTD: price at start of current year
+        try:
+            year_start = pd.Timestamp(f"{close.index[-1].year}-01-01")
+            mask_ytd = close.index >= year_start
+            price_ytd = float(close[mask_ytd].iloc[0]) if mask_ytd.any() else float(close.iloc[0])
+            ytd = (latest / price_ytd - 1) * 100 if price_ytd > 0 else 0
+        except Exception:
+            ytd = (latest / _back(75) - 1) * 100 if len(close) >= 75 else 0
 
         d1d = (latest - prev) / prev * 100
         d1m = (latest / _back(22) - 1) * 100 if len(close) >= 22 else 0
-        d1y = (latest / _back(252) - 1) * 100 if len(close) >= 252 else 0
-        ytd = (latest / _back(75) - 1) * 100 if len(close) >= 75 else 0
 
         hi  = df["High"].dropna()
         lo  = df["Low"].dropna()
@@ -2310,7 +2333,8 @@ def fetch_ticker_full(sym: str):
 
         return {
             "sym": sym, "price": latest,
-            "1d": d1d, "1m": d1m, "1y": d1y, "ytd": ytd,
+            "1d": round(d1d, 2), "1m": round(d1m, 2),
+            "1y": round(d1y, 2), "ytd": round(ytd, 2),
             "atr_pct": round(atr_pct, 2),
             "rsi": round(rsi_v, 1),
             "ema20": round(ema20, 2), "ema50": round(ema50, 2),
