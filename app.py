@@ -3839,7 +3839,8 @@ def tab_portfolio():
 
     with ptabs[0]:
         positions = st.session_state.get("positions", [])
-        # --- custom expander: 新增持倉 ---
+
+        # ── 新增持倉 ──
         _exp_key_2 = "exp_1"
         if "_exp_state" not in st.session_state:
             st.session_state["_exp_state"] = {}
@@ -3850,34 +3851,158 @@ def tab_portfolio():
             st.rerun()
         if _exp_open_2:
             with st.container():
-                pc1,pc2,pc3,pc4 = st.columns(4)
-                with pc1: new_tk  = st.text_input("代碼", key="pos_tk", placeholder="TSLA")
-                with pc2: new_qty = st.number_input("股數", min_value=1, value=100, key="pos_qty")
+                pc1, pc2, pc3, pc4 = st.columns(4)
+                with pc1: new_tk   = st.text_input("代碼", key="pos_tk", placeholder="TSLA")
+                with pc2: new_qty  = st.number_input("股數", min_value=1, value=100, key="pos_qty")
                 with pc3: new_cost = st.number_input("成本($)", min_value=0.01, value=200.0, step=0.01, key="pos_cost")
-                with pc4: new_dt = st.date_input("日期", key="pos_dt")
-                if st.button("新增", key="add_pos"):
+                with pc4: new_dt   = st.date_input("日期", key="pos_dt")
+                if st.button("✅ 確認新增", key="add_pos"):
                     if new_tk.strip():
-                        if "positions" not in st.session_state: st.session_state["positions"] = []
-                        st.session_state["positions"].append({"ticker":new_tk.strip().upper(),"qty":new_qty,"cost":new_cost,"date":str(new_dt)})
+                        if "positions" not in st.session_state:
+                            st.session_state["positions"] = []
+                        st.session_state["positions"].append({
+                            "ticker": new_tk.strip().upper(),
+                            "qty":    new_qty,
+                            "cost":   new_cost,
+                            "date":   str(new_dt),
+                        })
                         save_setting("positions", st.session_state["positions"])
+                        st.session_state["_exp_state"]["exp_1"] = False
                         st.rerun()
-        if positions:
-            rows2 = ""; total_v = total_c = 0
-            for pos in positions:
-                d2 = fetch_ticker_full(pos["ticker"])
-                price2 = d2["price"] if d2 else pos["cost"]
-                cv = price2*pos["qty"]; cc = pos["cost"]*pos["qty"]
-                pnl2 = cv-cc; pnl_p = pnl2/cc*100 if cc else 0
-                total_v+=cv; total_c+=cc
-                pc2 = "cell-up" if pnl2>=0 else "cell-dn"
-                rows2 += f'<tr><td style="font-weight:700">{pos["ticker"]}</td><td style="font-family:Inter">{pos["qty"]:,}</td><td style="font-family:Inter">${pos["cost"]:.2f}</td><td style="font-family:Inter">${price2:.2f}</td><td style="font-family:Inter">${cv:,.0f}</td><td><span class="{pc2}">${pnl2:+,.0f} ({pnl_p:+.1f}%)</span></td></tr>'
-            total_pnl2 = total_v-total_c; total_pp = total_pnl2/total_c*100 if total_c else 0
-            tc = "cell-up" if total_pnl2>=0 else "cell-dn"
-            st.markdown(f'<div class="ds-card" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:2px solid {th["border"]}">'+"".join(f'<th style="padding:7px 10px;font-size:10px;color:{th["text3"]}">{h}</th>' for h in ["代碼","股數","成本","現價","市值","盈虧"])+f'</tr></thead><tbody>{rows2}</tbody><tfoot><tr style="border-top:2px solid {th["border"]}"><td colspan="4" style="padding:7px 10px;font-weight:700;color:{th["text1"]}">總計</td><td style="padding:7px 10px;font-weight:700;font-family:Inter;color:{th["text1"]}">${total_v:,.0f}</td><td style="padding:7px 10px"><span class="{tc}" style="font-weight:700">${total_pnl2:+,.0f} ({total_pp:+.1f}%)</span></td></tr></tfoot></table></div>', unsafe_allow_html=True)
-            m1,m2,m3 = st.columns(3)
-            m1.metric("總市值",f"${total_v:,.0f}"); m2.metric("總成本",f"${total_c:,.0f}"); m3.metric("總盈虧",f"${total_pnl2:+,.0f}",f"{total_pp:+.1f}%")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── 持倉列表（含編輯 / 刪除）──
+        if not positions:
+            st.info("尚未加入持倉。點擊上方「新增持倉」開始。")
         else:
-            st.info("尚未加入持倉")
+            total_v = total_c = 0
+            edit_idx = st.session_state.get("pos_edit_idx", None)
+
+            for i, pos in enumerate(positions):
+                d2     = fetch_ticker_full(pos["ticker"])
+                price2 = d2["price"] if d2 else pos["cost"]
+                cv     = price2 * pos["qty"]
+                cc     = pos["cost"] * pos["qty"]
+                pnl2   = cv - cc
+                pnl_p  = pnl2 / cc * 100 if cc else 0
+                total_v += cv
+                total_c += cc
+                pnl_col = th["green"] if pnl2 >= 0 else th["red"]
+                pnl_cls = "cell-up" if pnl2 >= 0 else "cell-dn"
+
+                # ── Edit mode for this row ──
+                if edit_idx == i:
+                    st.markdown(
+                        f'<div style="background:{th["card2"]};border:1px solid {th["border"]};'
+                        f'border-radius:11px;padding:14px;margin-bottom:8px">'
+                        f'<div style="font-size:12px;color:{th["text3"]};margin-bottom:8px">'
+                        f'編輯持倉：{pos["ticker"]}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    e1, e2, e3, e4 = st.columns(4)
+                    with e1:
+                        e_tk = st.text_input("代碼", value=pos["ticker"], key=f"e_tk_{i}")
+                    with e2:
+                        e_qty = st.number_input("股數", min_value=1,
+                                                value=int(pos["qty"]), key=f"e_qty_{i}")
+                    with e3:
+                        e_cost = st.number_input("成本($)", min_value=0.01,
+                                                  value=float(pos["cost"]),
+                                                  step=0.01, key=f"e_cost_{i}")
+                    with e4:
+                        from datetime import date as _date
+                        try:
+                            e_dt_default = datetime.strptime(pos["date"], "%Y-%m-%d").date()
+                        except Exception:
+                            e_dt_default = _date.today()
+                        e_dt = st.date_input("日期", value=e_dt_default, key=f"e_dt_{i}")
+
+                    sv1, sv2 = st.columns(2)
+                    with sv1:
+                        if st.button("💾 儲存修改", key=f"save_edit_{i}", use_container_width=True):
+                            st.session_state["positions"][i] = {
+                                "ticker": e_tk.strip().upper(),
+                                "qty":    e_qty,
+                                "cost":   e_cost,
+                                "date":   str(e_dt),
+                            }
+                            save_setting("positions", st.session_state["positions"])
+                            st.session_state["pos_edit_idx"] = None
+                            st.rerun()
+                    with sv2:
+                        if st.button("✖ 取消", key=f"cancel_edit_{i}", use_container_width=True):
+                            st.session_state["pos_edit_idx"] = None
+                            st.rerun()
+
+                else:
+                    # ── Normal display row ──
+                    rc1, rc2, rc3, rc4, rc5, rc6, rc7, rc8 = st.columns(
+                        [1.2, 1, 1, 1, 1.2, 1.4, 0.7, 0.7])
+                    with rc1:
+                        st.markdown(
+                            f'<div style="font-size:14px;font-weight:700;'
+                            f'color:{th["text1"]};padding:10px 0">{pos["ticker"]}</div>',
+                            unsafe_allow_html=True)
+                    with rc2:
+                        st.markdown(
+                            f'<div style="font-size:13px;color:{th["text2"]};padding:10px 0">'
+                            f'{int(pos["qty"]):,}股</div>', unsafe_allow_html=True)
+                    with rc3:
+                        st.markdown(
+                            f'<div style="font-size:13px;color:{th["text2"]};padding:10px 0">'
+                            f'成本 ${pos["cost"]:.2f}</div>', unsafe_allow_html=True)
+                    with rc4:
+                        st.markdown(
+                            f'<div style="font-size:13px;color:{th["text2"]};padding:10px 0">'
+                            f'現價 ${price2:.2f}</div>', unsafe_allow_html=True)
+                    with rc5:
+                        st.markdown(
+                            f'<div style="font-size:13px;color:{th["text1"]};padding:10px 0">'
+                            f'市值 ${cv:,.0f}</div>', unsafe_allow_html=True)
+                    with rc6:
+                        st.markdown(
+                            f'<div style="font-size:13px;font-weight:700;'
+                            f'color:{pnl_col};padding:10px 0">'
+                            f'${pnl2:+,.0f} ({pnl_p:+.1f}%)</div>',
+                            unsafe_allow_html=True)
+                    with rc7:
+                        if st.button("✏️", key=f"edit_pos_{i}", help="編輯",
+                                     use_container_width=True):
+                            st.session_state["pos_edit_idx"] = i
+                            st.rerun()
+                    with rc8:
+                        if st.button("🗑", key=f"del_pos_{i}", help="刪除",
+                                     use_container_width=True):
+                            st.session_state["positions"].pop(i)
+                            save_setting("positions", st.session_state["positions"])
+                            st.rerun()
+
+                # Divider between rows
+                st.markdown(
+                    f'<div style="height:1px;background:{th["border2"]};margin:2px 0"></div>',
+                    unsafe_allow_html=True)
+
+            # ── Totals ──
+            total_pnl2 = total_v - total_c
+            total_pp   = total_pnl2 / total_c * 100 if total_c else 0
+            tc_col     = th["green"] if total_pnl2 >= 0 else th["red"]
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown(
+                f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+                f'border-radius:11px;padding:14px 18px;display:flex;gap:32px;flex-wrap:wrap">'
+                f'<div><div style="font-size:10px;color:{th["text3"]};margin-bottom:3px">總市值</div>'
+                f'<div style="font-size:18px;font-weight:800;color:{th["text1"]};'
+                f'font-family:Inter">${total_v:,.0f}</div></div>'
+                f'<div><div style="font-size:10px;color:{th["text3"]};margin-bottom:3px">總成本</div>'
+                f'<div style="font-size:18px;font-weight:800;color:{th["text1"]};'
+                f'font-family:Inter">${total_c:,.0f}</div></div>'
+                f'<div><div style="font-size:10px;color:{th["text3"]};margin-bottom:3px">總盈虧</div>'
+                f'<div style="font-size:18px;font-weight:800;color:{tc_col};'
+                f'font-family:Inter">${total_pnl2:+,.0f} ({total_pp:+.1f}%)</div></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
     with ptabs[1]:
         st.markdown(f'<div style="font-size:13px;color:{th["text2"]};margin-bottom:14px;line-height:1.6">Kelly % = (勝率 × 盈虧比 - 敗率) / 盈虧比。建議使用半 Kelly（保守版）。</div>', unsafe_allow_html=True)
@@ -3936,15 +4061,151 @@ def tab_journal():
                 if st.button("✅ 記錄", key="add_trade"):
                     if jtk.strip():
                         mult = 1 if "Long" in jdir else -1
-                        pnl = (jexit-jentry)*jqty*mult
-                        if "journal" not in st.session_state: st.session_state["journal"] = []
-                        st.session_state["journal"].append({"date":datetime.now().strftime("%Y-%m-%d"),"ticker":jtk.strip().upper(),"direction":jdir,"entry":jentry,"exit":jexit,"qty":jqty,"pnl":pnl,"emotion":jemo,"reason_in":j_in,"reason_out":j_out})
+                        pnl = (jexit - jentry) * jqty * mult
+                        if "journal" not in st.session_state:
+                            st.session_state["journal"] = []
+                        st.session_state["journal"].append({
+                            "date":       datetime.now().strftime("%Y-%m-%d"),
+                            "ticker":     jtk.strip().upper(),
+                            "direction":  jdir,
+                            "entry":      jentry,
+                            "exit":       jexit,
+                            "qty":        jqty,
+                            "pnl":        pnl,
+                            "emotion":    jemo,
+                            "reason_in":  j_in,
+                            "reason_out": j_out,
+                        })
                         save_setting("journal", st.session_state["journal"])
+                        st.session_state["_exp_state"]["exp_2"] = False
                         st.success(f"已記錄 {jtk.upper()} · 盈虧 ${pnl:+,.2f}")
+                        st.rerun()
+
+        # ── Journal list with edit / delete ──
         journal = st.session_state.get("journal", [])
-        if journal:
-            jrows = "".join(f'<tr><td>{x["date"]}</td><td style="font-weight:700">{x["ticker"]}</td><td style="font-size:11px">{x["direction"]}</td><td style="font-family:Inter">${x["entry"]:.2f}</td><td style="font-family:Inter">${x["exit"]:.2f}</td><td style="font-family:Inter">{x["qty"]:,}</td><td><span class="{"cell-up" if x["pnl"]>=0 else "cell-dn"}">${x["pnl"]:+,.0f}</span></td><td style="font-size:12px">{x["emotion"]}</td></tr>' for x in reversed(journal[-20:]))
-            st.markdown(f'<div class="ds-card" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:2px solid {th["border"]}">'+"".join(f'<th style="padding:7px 10px;font-size:10px;color:{th["text3"]}">{h}</th>' for h in ["日期","代碼","方向","入場","出場","股數","盈虧","情緒"])+f'</tr></thead><tbody>{jrows}</tbody></table></div>', unsafe_allow_html=True)
+        if not journal:
+            st.info("尚未記錄任何交易")
+        else:
+            j_edit_idx = st.session_state.get("j_edit_idx", None)
+            st.markdown(f'<div style="height:8px"></div>', unsafe_allow_html=True)
+
+            # Display newest first
+            for raw_i, tr in enumerate(reversed(journal)):
+                i = len(journal) - 1 - raw_i  # actual index in list
+
+                pnl_col = th["green"] if tr["pnl"] >= 0 else th["red"]
+                dir_col = th["green"] if "Long" in tr["direction"] else th["red"]
+
+                if j_edit_idx == i:
+                    # ── Edit mode ──
+                    st.markdown(
+                        f'<div style="background:{th["card2"]};border:1px solid {th["border"]};'
+                        f'border-radius:11px;padding:14px;margin-bottom:8px">'
+                        f'<div style="font-size:12px;color:{th["text3"]};margin-bottom:8px">'
+                        f'編輯記錄：{tr["ticker"]} {tr["date"]}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    ej1, ej2, ej3 = st.columns(3)
+                    with ej1:
+                        e_jtk   = st.text_input("代碼", value=tr["ticker"], key=f"ej_tk_{i}")
+                        e_jdir  = st.radio("方向", ["做多 Long","做空 Short"],
+                                           index=0 if "Long" in tr["direction"] else 1,
+                                           key=f"ej_dir_{i}")
+                    with ej2:
+                        e_entry = st.number_input("入場價($)", value=float(tr["entry"]),
+                                                   step=0.01, key=f"ej_entry_{i}")
+                        e_exit  = st.number_input("出場價($)", value=float(tr["exit"]),
+                                                   step=0.01, key=f"ej_exit_{i}")
+                    with ej3:
+                        e_qty   = st.number_input("股數", min_value=1, value=int(tr["qty"]),
+                                                   key=f"ej_qty_{i}")
+                        e_emo   = st.selectbox("情緒",
+                                               ["😌 冷靜","😰 緊張","😤 貪婪","😱 恐懼"],
+                                               index=["😌 冷靜","😰 緊張","😤 貪婪","😱 恐懼"].index(tr["emotion"])
+                                               if tr["emotion"] in ["😌 冷靜","😰 緊張","😤 貪婪","😱 恐懼"] else 0,
+                                               key=f"ej_emo_{i}")
+                    e_in  = st.text_input("入場理由", value=tr.get("reason_in",""),  key=f"ej_in_{i}")
+                    e_out = st.text_input("出場理由", value=tr.get("reason_out",""), key=f"ej_out_{i}")
+
+                    esv1, esv2 = st.columns(2)
+                    with esv1:
+                        if st.button("💾 儲存修改", key=f"save_j_{i}", use_container_width=True):
+                            mult_e = 1 if "Long" in e_jdir else -1
+                            pnl_e  = (e_exit - e_entry) * e_qty * mult_e
+                            st.session_state["journal"][i] = {
+                                "date":       tr["date"],
+                                "ticker":     e_jtk.strip().upper(),
+                                "direction":  e_jdir,
+                                "entry":      e_entry,
+                                "exit":       e_exit,
+                                "qty":        e_qty,
+                                "pnl":        pnl_e,
+                                "emotion":    e_emo,
+                                "reason_in":  e_in,
+                                "reason_out": e_out,
+                            }
+                            save_setting("journal", st.session_state["journal"])
+                            st.session_state["j_edit_idx"] = None
+                            st.rerun()
+                    with esv2:
+                        if st.button("✖ 取消", key=f"cancel_j_{i}", use_container_width=True):
+                            st.session_state["j_edit_idx"] = None
+                            st.rerun()
+
+                else:
+                    # ── Normal display row ──
+                    jc1,jc2,jc3,jc4,jc5,jc6,jc7,jc8,jc9,jc10 = st.columns(
+                        [0.9, 1, 0.9, 1, 1, 0.8, 1.2, 1.5, 0.55, 0.55])
+                    with jc1:
+                        st.markdown(
+                            f'<div style="font-size:11px;color:{th["text3"]};padding:10px 0">'
+                            f'{tr["date"]}</div>', unsafe_allow_html=True)
+                    with jc2:
+                        st.markdown(
+                            f'<div style="font-size:14px;font-weight:700;'
+                            f'color:{th["text1"]};padding:10px 0">{tr["ticker"]}</div>',
+                            unsafe_allow_html=True)
+                    with jc3:
+                        st.markdown(
+                            f'<div style="font-size:11px;color:{dir_col};padding:10px 0;font-weight:600">'
+                            f'{"▲ 做多" if "Long" in tr["direction"] else "▼ 做空"}</div>',
+                            unsafe_allow_html=True)
+                    with jc4:
+                        st.markdown(
+                            f'<div style="font-size:12px;color:{th["text2"]};padding:10px 0">'
+                            f'入 ${tr["entry"]:.2f}</div>', unsafe_allow_html=True)
+                    with jc5:
+                        st.markdown(
+                            f'<div style="font-size:12px;color:{th["text2"]};padding:10px 0">'
+                            f'出 ${tr["exit"]:.2f}</div>', unsafe_allow_html=True)
+                    with jc6:
+                        st.markdown(
+                            f'<div style="font-size:12px;color:{th["text2"]};padding:10px 0">'
+                            f'{int(tr["qty"]):,}股</div>', unsafe_allow_html=True)
+                    with jc7:
+                        st.markdown(
+                            f'<div style="font-size:13px;font-weight:700;'
+                            f'color:{pnl_col};padding:10px 0">'
+                            f'${tr["pnl"]:+,.0f}</div>', unsafe_allow_html=True)
+                    with jc8:
+                        st.markdown(
+                            f'<div style="font-size:11px;color:{th["text3"]};padding:10px 0">'
+                            f'{tr.get("emotion","")}</div>', unsafe_allow_html=True)
+                    with jc9:
+                        if st.button("✏️", key=f"edit_j_{i}", help="編輯",
+                                     use_container_width=True):
+                            st.session_state["j_edit_idx"] = i
+                            st.rerun()
+                    with jc10:
+                        if st.button("🗑", key=f"del_j_{i}", help="刪除",
+                                     use_container_width=True):
+                            st.session_state["journal"].pop(i)
+                            save_setting("journal", st.session_state["journal"])
+                            st.rerun()
+
+                st.markdown(
+                    f'<div style="height:1px;background:{th["border2"]};margin:2px 0"></div>',
+                    unsafe_allow_html=True)
 
     with jtabs[1]:
         journal = st.session_state.get("journal", [])
