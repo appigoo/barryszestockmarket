@@ -26,7 +26,7 @@ st.set_page_config(
     page_title="MarketIQ Dashboard",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ═══════════════════════════════════════════════════════════════════
@@ -358,7 +358,51 @@ def inject_css():
     /* Hide Streamlit chrome */
     #MainMenu, footer, header {{ visibility: hidden; }}
     .stDeployButton {{ display: none; }}
-    section[data-testid="stSidebar"] {{ display: none !important; }}
+
+    /* ── SIDEBAR ── */
+    section[data-testid="stSidebar"] {{
+        background: {th['nav']} !important;
+        border-right: 1px solid {th['nav_border']} !important;
+        min-width: 240px !important;
+        max-width: 240px !important;
+    }}
+    section[data-testid="stSidebar"] > div {{
+        padding: 20px 16px !important;
+    }}
+    /* Hide sidebar collapse arrow button */
+    button[data-testid="collapsedControl"] {{
+        display: none !important;
+    }}
+    /* Sidebar text color override */
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] div {{
+        color: {th['nav_text']} !important;
+    }}
+    /* Sidebar buttons */
+    section[data-testid="stSidebar"] .stButton > button {{
+        background: {th['card2']} !important;
+        color: {th['text2']} !important;
+        border: 1px solid {th['border']} !important;
+        border-radius: 8px !important;
+        font-size: 12px !important;
+        padding: 6px 8px !important;
+        font-weight: 500 !important;
+    }}
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"] {{
+        background: {th['green']} !important;
+        color: #111118 !important;
+        border-color: {th['green']} !important;
+        font-weight: 700 !important;
+    }}
+    /* Sidebar selectbox */
+    section[data-testid="stSidebar"] .stSelectbox > div > div {{
+        background: {th['card']} !important;
+        border: 1px solid {th['border']} !important;
+        color: {th['text1']} !important;
+        font-size: 12px !important;
+    }}
 
     .stApp {{
         background: {th['bg']} !important;
@@ -367,7 +411,7 @@ def inject_css():
     }}
 
     .block-container {{
-        padding-top: 0 !important;
+        padding-top: 16px !important;
         padding-bottom: 0 !important;
         max-width: 100% !important;
     }}
@@ -1209,6 +1253,9 @@ def render_login():
         min-height: 100vh;
     }
     #MainMenu, footer, header, .stDeployButton { visibility: hidden; }
+    /* Hide sidebar on login page */
+    section[data-testid="stSidebar"] { display: none !important; }
+    button[data-testid="collapsedControl"] { display: none !important; }
     [data-testid="stVerticalBlock"] { gap: 0 !important; }
     [data-testid="stHorizontalBlock"] { gap: 0 !important; }
 
