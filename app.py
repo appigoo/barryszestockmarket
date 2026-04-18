@@ -1978,236 +1978,236 @@ def tab_global_market():
 
 
 
-    # ═══════════════════════════════════════════════════════════════════
-    #   DATA HELPERS FOR ALL TABS
-    # ═══════════════════════════════════════════════════════════════════
-    @st.cache_data(ttl=300, show_spinner=False)
-    def fetch_ticker_full(sym: str):
-        try:
-            df = yf.download(sym, period="1y", interval="1d", progress=False, auto_adjust=True)
-            if df.empty or len(df) < 10:
-                return None
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            close = df["Close"].dropna()
-            if isinstance(close, pd.DataFrame):
-                close = close.iloc[:, 0]
-            latest = float(close.iloc[-1])
-            prev   = float(close.iloc[-2])
-
-            def _back(n):
-                idx = max(0, len(close) - n)
-                return float(close.iloc[idx])
-
-            d1d = (latest - prev) / prev * 100
-            d1m = (latest / _back(22) - 1) * 100 if len(close) >= 22 else 0
-            d1y = (latest / _back(252) - 1) * 100 if len(close) >= 252 else 0
-            ytd = (latest / _back(75) - 1) * 100 if len(close) >= 75 else 0
-
-            hi  = df["High"].dropna()
-            lo  = df["Low"].dropna()
-            if isinstance(hi, pd.DataFrame): hi = hi.iloc[:, 0]
-            if isinstance(lo, pd.DataFrame): lo = lo.iloc[:, 0]
-            atr = float((hi - lo).rolling(14).mean().iloc[-1])
-            atr_pct = atr / latest * 100
-
-            delta = close.diff()
-            gain  = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
-            loss  = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-            rsi_v = float(100 - 100 / (1 + gain.iloc[-1] / max(loss.iloc[-1], 1e-9)))
-
-            ema20 = float(close.ewm(span=20).mean().iloc[-1])
-            ema50 = float(close.ewm(span=50).mean().iloc[-1]) if len(close) >= 50 else ema20
-
-            hi52  = float(hi.tail(252).max())
-            lo52  = float(lo.tail(252).min())
-            pos52 = (latest - lo52) / (hi52 - lo52) * 100 if hi52 != lo52 else 50
-
-            trend = 35 if latest > ema20 > ema50 else (20 if latest > ema20 else 5)
-            mom   = (30 if 50 < rsi_v < 70 else 20 if 40 < rsi_v <= 50 else
-                     25 if 70 <= rsi_v < 80 else 10)
-            vol_s = 35 if atr_pct < 2 else (25 if atr_pct < 4 else 15)
-            score = min(100, max(0, trend + mom + vol_s))
-            label = "buy" if score >= 70 else ("watch" if score >= 45 else "avoid")
-
-            return {
-                "sym": sym, "price": latest,
-                "1d": d1d, "1m": d1m, "1y": d1y, "ytd": ytd,
-                "atr_pct": round(atr_pct, 2),
-                "rsi": round(rsi_v, 1),
-                "ema20": round(ema20, 2), "ema50": round(ema50, 2),
-                "hi52": round(hi52, 2), "lo52": round(lo52, 2),
-                "pos52": round(pos52, 1),
-                "score": score, "label": label,
-                "history": close.tail(252).tolist(),
-            }
-        except Exception:
+# ═══════════════════════════════════════════════════════════════════
+#   DATA HELPERS FOR ALL TABS
+# ═══════════════════════════════════════════════════════════════════
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_ticker_full(sym: str):
+    try:
+        df = yf.download(sym, period="1y", interval="1d", progress=False, auto_adjust=True)
+        if df.empty or len(df) < 10:
             return None
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        close = df["Close"].dropna()
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        latest = float(close.iloc[-1])
+        prev   = float(close.iloc[-2])
+
+        def _back(n):
+            idx = max(0, len(close) - n)
+            return float(close.iloc[idx])
+
+        d1d = (latest - prev) / prev * 100
+        d1m = (latest / _back(22) - 1) * 100 if len(close) >= 22 else 0
+        d1y = (latest / _back(252) - 1) * 100 if len(close) >= 252 else 0
+        ytd = (latest / _back(75) - 1) * 100 if len(close) >= 75 else 0
+
+        hi  = df["High"].dropna()
+        lo  = df["Low"].dropna()
+        if isinstance(hi, pd.DataFrame): hi = hi.iloc[:, 0]
+        if isinstance(lo, pd.DataFrame): lo = lo.iloc[:, 0]
+        atr = float((hi - lo).rolling(14).mean().iloc[-1])
+        atr_pct = atr / latest * 100
+
+        delta = close.diff()
+        gain  = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
+        loss  = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+        rsi_v = float(100 - 100 / (1 + gain.iloc[-1] / max(loss.iloc[-1], 1e-9)))
+
+        ema20 = float(close.ewm(span=20).mean().iloc[-1])
+        ema50 = float(close.ewm(span=50).mean().iloc[-1]) if len(close) >= 50 else ema20
+
+        hi52  = float(hi.tail(252).max())
+        lo52  = float(lo.tail(252).min())
+        pos52 = (latest - lo52) / (hi52 - lo52) * 100 if hi52 != lo52 else 50
+
+        trend = 35 if latest > ema20 > ema50 else (20 if latest > ema20 else 5)
+        mom   = (30 if 50 < rsi_v < 70 else 20 if 40 < rsi_v <= 50 else
+                 25 if 70 <= rsi_v < 80 else 10)
+        vol_s = 35 if atr_pct < 2 else (25 if atr_pct < 4 else 15)
+        score = min(100, max(0, trend + mom + vol_s))
+        label = "buy" if score >= 70 else ("watch" if score >= 45 else "avoid")
+
+        return {
+            "sym": sym, "price": latest,
+            "1d": d1d, "1m": d1m, "1y": d1y, "ytd": ytd,
+            "atr_pct": round(atr_pct, 2),
+            "rsi": round(rsi_v, 1),
+            "ema20": round(ema20, 2), "ema50": round(ema50, 2),
+            "hi52": round(hi52, 2), "lo52": round(lo52, 2),
+            "pos52": round(pos52, 1),
+            "score": score, "label": label,
+            "history": close.tail(252).tolist(),
+        }
+    except Exception:
+        return None
 
 
-    @st.cache_data(ttl=300, show_spinner=False)
-    def fetch_ohlcv_period(sym: str, period: str = "3mo") -> pd.DataFrame:
-        try:
-            df = yf.download(sym, period=period, interval="1d", progress=False, auto_adjust=True)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            return df.dropna()
-        except Exception:
-            return pd.DataFrame()
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_ohlcv_period(sym: str, period: str = "3mo") -> pd.DataFrame:
+    try:
+        df = yf.download(sym, period=period, interval="1d", progress=False, auto_adjust=True)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df.dropna()
+    except Exception:
+        return pd.DataFrame()
 
 
-    def make_candlestick_fig(df: pd.DataFrame, sym: str, height: int = 320):
-        from plotly.subplots import make_subplots
-        th = get_theme()
-        if df.empty:
-            return go.Figure()
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                            row_heights=[0.72, 0.28], vertical_spacing=0.03)
-        fig.add_trace(go.Candlestick(
-            x=df.index, open=df["Open"], high=df["High"],
-            low=df["Low"], close=df["Close"],
-            increasing_line_color=th["green"], increasing_fillcolor=th["green"],
-            decreasing_line_color=th["red"],   decreasing_fillcolor=th["red"],
-            name=sym, line_width=1,
-        ), row=1, col=1)
-        if len(df) >= 20:
-            fig.add_trace(go.Scatter(x=df.index, y=df["Close"].ewm(span=20).mean(),
-                line=dict(color=th["orange"], width=1.5), name="EMA20"), row=1, col=1)
-        if len(df) >= 50:
-            fig.add_trace(go.Scatter(x=df.index, y=df["Close"].ewm(span=50).mean(),
-                line=dict(color=th["purple"], width=1.2, dash="dot"), name="EMA50"), row=1, col=1)
-        if "Volume" in df.columns:
-            vcols = [th["green"] if df["Close"].iloc[i] >= df["Open"].iloc[i]
-                     else th["red"] for i in range(len(df))]
-            fig.add_trace(go.Bar(x=df.index, y=df["Volume"],
-                marker_color=vcols, showlegend=False), row=2, col=1)
-        ax = dict(showgrid=True, gridcolor=th["chart_grid"],
-                  showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
-        fig.update_layout(
-            paper_bgcolor=th["card"], plot_bgcolor=th["card"],
-            height=height, margin=dict(l=8, r=8, t=8, b=8),
-            xaxis=dict(**ax, rangeslider_visible=False), xaxis2=dict(**ax),
-            yaxis=dict(**ax), yaxis2=dict(**ax, tickformat=".2s"),
-            legend=dict(font=dict(size=10, color=th["chart_tick"]),
-                        bgcolor="rgba(0,0,0,0)", orientation="h",
-                        yanchor="bottom", y=1.01, xanchor="left", x=0),
-            font=dict(family="Inter"), hovermode="x unified",
+def make_candlestick_fig(df: pd.DataFrame, sym: str, height: int = 320):
+    from plotly.subplots import make_subplots
+    th = get_theme()
+    if df.empty:
+        return go.Figure()
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        row_heights=[0.72, 0.28], vertical_spacing=0.03)
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"],
+        increasing_line_color=th["green"], increasing_fillcolor=th["green"],
+        decreasing_line_color=th["red"],   decreasing_fillcolor=th["red"],
+        name=sym, line_width=1,
+    ), row=1, col=1)
+    if len(df) >= 20:
+        fig.add_trace(go.Scatter(x=df.index, y=df["Close"].ewm(span=20).mean(),
+            line=dict(color=th["orange"], width=1.5), name="EMA20"), row=1, col=1)
+    if len(df) >= 50:
+        fig.add_trace(go.Scatter(x=df.index, y=df["Close"].ewm(span=50).mean(),
+            line=dict(color=th["purple"], width=1.2, dash="dot"), name="EMA50"), row=1, col=1)
+    if "Volume" in df.columns:
+        vcols = [th["green"] if df["Close"].iloc[i] >= df["Open"].iloc[i]
+                 else th["red"] for i in range(len(df))]
+        fig.add_trace(go.Bar(x=df.index, y=df["Volume"],
+            marker_color=vcols, showlegend=False), row=2, col=1)
+    ax = dict(showgrid=True, gridcolor=th["chart_grid"],
+              showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
+    fig.update_layout(
+        paper_bgcolor=th["card"], plot_bgcolor=th["card"],
+        height=height, margin=dict(l=8, r=8, t=8, b=8),
+        xaxis=dict(**ax, rangeslider_visible=False), xaxis2=dict(**ax),
+        yaxis=dict(**ax), yaxis2=dict(**ax, tickformat=".2s"),
+        legend=dict(font=dict(size=10, color=th["chart_tick"]),
+                    bgcolor="rgba(0,0,0,0)", orientation="h",
+                    yanchor="bottom", y=1.01, xanchor="left", x=0),
+        font=dict(family="Inter"), hovermode="x unified",
+    )
+    return fig
+
+
+def make_perf_fig(histories: dict, height: int = 260):
+    th = get_theme()
+    palette = [th["green"], th["red"], th["blue"], th["orange"],
+               th["purple"], "#00c9ff", "#ff8c00", "#e040fb"]
+    fig = go.Figure()
+    for i, (name, prices) in enumerate(histories.items()):
+        if not prices or len(prices) < 2 or prices[0] == 0:
+            continue
+        norm = [p / prices[0] * 100 for p in prices]
+        fig.add_trace(go.Scatter(y=norm, mode="lines", name=name,
+            line=dict(color=palette[i % len(palette)], width=2),
+            hovertemplate=f"{name}: %{{y:.1f}}<extra></extra>"))
+    fig.add_hline(y=100, line_dash="dash", line_color=th["chart_tick"], line_width=0.8)
+    ax = dict(showgrid=True, gridcolor=th["chart_grid"],
+              showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
+    fig.update_layout(
+        paper_bgcolor=th["card"], plot_bgcolor=th["card"],
+        height=height, margin=dict(l=8, r=8, t=8, b=8),
+        xaxis=dict(**ax, showticklabels=False), yaxis=dict(**ax),
+        legend=dict(font=dict(size=10, color=th["chart_tick"]),
+                    bgcolor="rgba(0,0,0,0)", orientation="h"),
+        font=dict(family="Inter"), hovermode="x unified",
+    )
+    return fig
+
+
+def make_bar_fig(names: list, vals: list, height: int = 240):
+    th = get_theme()
+    colors = [th["green"] if v >= 0 else th["red"] for v in vals]
+    fig = go.Figure(go.Bar(
+        x=names, y=vals, marker_color=colors, marker_cornerradius=4,
+        text=[f"{v:+.1f}%" for v in vals], textposition="outside",
+        textfont=dict(size=10, color=th["chart_tick"]),
+    ))
+    ax = dict(showgrid=True, gridcolor=th["chart_grid"],
+              showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
+    fig.update_layout(
+        paper_bgcolor=th["card"], plot_bgcolor=th["card"],
+        height=height, margin=dict(l=8, r=8, t=8, b=55),
+        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=th["chart_tick"]), tickangle=35),
+        yaxis=dict(**ax, ticksuffix="%",
+                   zeroline=True, zerolinecolor=th["chart_tick"], zerolinewidth=0.5),
+        showlegend=False, font=dict(family="Inter"),
+    )
+    return fig
+
+
+def sec_title(txt: str) -> str:
+    th = get_theme()
+    return (f'<div style="font-size:14px;font-weight:600;color:{th["text1"]};'
+            f'margin-bottom:12px">{txt}</div>')
+
+
+def lock_msg() -> None:
+    th = get_theme()
+    st.markdown(
+        f'<div style="text-align:center;padding:32px;background:{th["card2"]};'
+        f'border-radius:12px;border:1px solid {th["border"]};margin:8px 0">'
+        f'<div style="font-size:28px;margin-bottom:10px">🔒</div>'
+        f'<div style="font-size:14px;color:{th["text2"]};margin-bottom:6px">Pro 專屬功能</div>'
+        f'<div style="font-size:12px;color:{th["text3"]}">升級 Pro 解鎖全部功能</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def is_pro() -> bool:
+    return st.session_state.get("role", "free") in ("pro", "admin")
+
+
+def groq_call(prompt: str, sys_msg: str = "") -> str:
+    import requests as _req
+    try:
+        key = st.secrets["groq"]["api_key"]
+    except Exception:
+        return "⚠️ 請在 Streamlit Secrets 設定 Groq API Key（groq.api_key）"
+    lang = st.session_state.get("lang", "zh-hant")
+    lang_inst = {"zh-hant": "請用繁體中文回答。",
+                 "zh-hans": "请用简体中文回答。",
+                 "en": "Please respond in English."}.get(lang, "請用繁體中文回答。")
+    system = sys_msg or f"你是一位專業股票市場分析師。{lang_inst}"
+    model = "llama-3.3-70b-versatile" if is_pro() else "llama-3.1-8b-instant"
+    try:
+        r = _req.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"model": model, "max_tokens": 1024, "temperature": 0.3,
+                  "messages": [{"role": "system", "content": system},
+                                {"role": "user", "content": prompt}]},
+            timeout=30,
         )
-        return fig
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"⚠️ AI 分析失敗: {str(e)[:120]}"
 
 
-    def make_perf_fig(histories: dict, height: int = 260):
-        th = get_theme()
-        palette = [th["green"], th["red"], th["blue"], th["orange"],
-                   th["purple"], "#00c9ff", "#ff8c00", "#e040fb"]
-        fig = go.Figure()
-        for i, (name, prices) in enumerate(histories.items()):
-            if not prices or len(prices) < 2 or prices[0] == 0:
-                continue
-            norm = [p / prices[0] * 100 for p in prices]
-            fig.add_trace(go.Scatter(y=norm, mode="lines", name=name,
-                line=dict(color=palette[i % len(palette)], width=2),
-                hovertemplate=f"{name}: %{{y:.1f}}<extra></extra>"))
-        fig.add_hline(y=100, line_dash="dash", line_color=th["chart_tick"], line_width=0.8)
-        ax = dict(showgrid=True, gridcolor=th["chart_grid"],
-                  showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
-        fig.update_layout(
-            paper_bgcolor=th["card"], plot_bgcolor=th["card"],
-            height=height, margin=dict(l=8, r=8, t=8, b=8),
-            xaxis=dict(**ax, showticklabels=False), yaxis=dict(**ax),
-            legend=dict(font=dict(size=10, color=th["chart_tick"]),
-                        bgcolor="rgba(0,0,0,0)", orientation="h"),
-            font=dict(family="Inter"), hovermode="x unified",
-        )
-        return fig
+def send_telegram_msg(chat_id: str, text: str) -> bool:
+    import requests as _req
+    try:
+        tok = st.secrets["telegram"]["bot_token"]
+        r = _req.post(f"https://api.telegram.org/bot{tok}/sendMessage",
+                      json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+                      timeout=10)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 
-    def make_bar_fig(names: list, vals: list, height: int = 240):
-        th = get_theme()
-        colors = [th["green"] if v >= 0 else th["red"] for v in vals]
-        fig = go.Figure(go.Bar(
-            x=names, y=vals, marker_color=colors, marker_cornerradius=4,
-            text=[f"{v:+.1f}%" for v in vals], textposition="outside",
-            textfont=dict(size=10, color=th["chart_tick"]),
-        ))
-        ax = dict(showgrid=True, gridcolor=th["chart_grid"],
-                  showline=False, tickfont=dict(size=10, color=th["chart_tick"]))
-        fig.update_layout(
-            paper_bgcolor=th["card"], plot_bgcolor=th["card"],
-            height=height, margin=dict(l=8, r=8, t=8, b=55),
-            xaxis=dict(showgrid=False, tickfont=dict(size=10, color=th["chart_tick"]), tickangle=35),
-            yaxis=dict(**ax, ticksuffix="%",
-                       zeroline=True, zerolinecolor=th["chart_tick"], zerolinewidth=0.5),
-            showlegend=False, font=dict(family="Inter"),
-        )
-        return fig
-
-
-    def sec_title(txt: str) -> str:
-        th = get_theme()
-        return (f'<div style="font-size:14px;font-weight:600;color:{th["text1"]};'
-                f'margin-bottom:12px">{txt}</div>')
-
-
-    def lock_msg() -> None:
-        th = get_theme()
-        st.markdown(
-            f'<div style="text-align:center;padding:32px;background:{th["card2"]};'
-            f'border-radius:12px;border:1px solid {th["border"]};margin:8px 0">'
-            f'<div style="font-size:28px;margin-bottom:10px">🔒</div>'
-            f'<div style="font-size:14px;color:{th["text2"]};margin-bottom:6px">Pro 專屬功能</div>'
-            f'<div style="font-size:12px;color:{th["text3"]}">升級 Pro 解鎖全部功能</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-
-    def is_pro() -> bool:
-        return st.session_state.get("role", "free") in ("pro", "admin")
-
-
-    def groq_call(prompt: str, sys_msg: str = "") -> str:
-        import requests as _req
-        try:
-            key = st.secrets["groq"]["api_key"]
-        except Exception:
-            return "⚠️ 請在 Streamlit Secrets 設定 Groq API Key（groq.api_key）"
-        lang = st.session_state.get("lang", "zh-hant")
-        lang_inst = {"zh-hant": "請用繁體中文回答。",
-                     "zh-hans": "请用简体中文回答。",
-                     "en": "Please respond in English."}.get(lang, "請用繁體中文回答。")
-        system = sys_msg or f"你是一位專業股票市場分析師。{lang_inst}"
-        model = "llama-3.3-70b-versatile" if is_pro() else "llama-3.1-8b-instant"
-        try:
-            r = _req.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": model, "max_tokens": 1024, "temperature": 0.3,
-                      "messages": [{"role": "system", "content": system},
-                                    {"role": "user", "content": prompt}]},
-                timeout=30,
-            )
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            return f"⚠️ AI 分析失敗: {str(e)[:120]}"
-
-
-    def send_telegram_msg(chat_id: str, text: str) -> bool:
-        import requests as _req
-        try:
-            tok = st.secrets["telegram"]["bot_token"]
-            r = _req.post(f"https://api.telegram.org/bot{tok}/sendMessage",
-                          json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-                          timeout=10)
-            return r.status_code == 200
-        except Exception:
-            return False
-
-
-    # ═══════════════════════════════════════════════════════════════════
-    #   TAB 2 — WATCHLIST ANALYSIS
-    # ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+#   TAB 2 — WATCHLIST ANALYSIS
+# ═══════════════════════════════════════════════════════════════════
 def tab_watchlist():
     th = get_theme()
     st.markdown(sec_title("⭐ " + t("nav_watchlist")), unsafe_allow_html=True)
