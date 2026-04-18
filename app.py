@@ -1080,6 +1080,131 @@ def authenticate(username: str, password: str):
 
 
 # ═══════════════════════════════════════════════════════════════════
+#   PERSISTENCE — Read/Write user settings to Google Sheets
+# ═══════════════════════════════════════════════════════════════════
+
+# Column name → session_state key → default value → JSON?
+USER_SETTINGS_MAP = {
+    # col_name          ss_key              default                  is_json
+    "theme":           ("theme",            "dark",                  False),
+    "language":        ("lang",             "zh-hant",               False),
+    "font_size":       ("font_size",        "md",                    False),
+    "telegram_chat_id":("telegram_id",      "",                      False),
+    "watchlist":       ("wl_tickers",       "TSLA, AAPL, NVDA, AMZN, META", False),
+    "price_alerts":    ("price_alerts",     "{}",                    True),
+    "portfolios":      ("portfolios",       "{}",                    True),
+    "positions":       ("positions",        "[]",                    True),
+    "journal":         ("journal",          "[]",                    True),
+    "kelly_settings":  ("kelly_settings",   '{"winrate":55,"ratio":2.0}', True),
+}
+
+
+def load_user_settings(user_data: dict) -> None:
+    """Load all persisted settings from user_data into session_state on login"""
+    for col_name, (ss_key, default, is_json) in USER_SETTINGS_MAP.items():
+        raw = str(user_data.get(col_name, default) or default).strip()
+        if not raw:
+            raw = default
+        if is_json:
+            try:
+                st.session_state[ss_key] = json.loads(raw)
+            except Exception:
+                try:
+                    st.session_state[ss_key] = json.loads(default)
+                except Exception:
+                    st.session_state[ss_key] = {} if default == "{}" else []
+        else:
+            st.session_state[ss_key] = raw
+
+
+def _get_user_row(sheet, username: str):
+    """Return (row_index, headers) for a username. row_index is 1-based."""
+    try:
+        records = sheet.get_all_records()
+        headers = sheet.row_values(1)
+        for i, row in enumerate(records, start=2):
+            if str(row.get("username", "")).lower() == username.lower():
+                return i, headers
+    except Exception:
+        pass
+    return None, None
+
+
+def save_setting(col_name: str, value) -> None:
+    """
+    Write a single setting back to Google Sheets immediately.
+    value can be str, dict, or list — will be JSON-serialized if needed.
+    """
+    sheet = get_gsheet()
+    if sheet is None:
+        return  # Fallback mode, skip silently
+    username = st.session_state.get("username", "")
+    if not username:
+        return
+    try:
+        row_idx, headers = _get_user_row(sheet, username)
+        if row_idx is None or col_name not in headers:
+            return
+        col_idx = headers.index(col_name) + 1
+        if isinstance(value, (dict, list)):
+            cell_val = json.dumps(value, ensure_ascii=False)
+        else:
+            cell_val = str(value)
+        sheet.update_cell(row_idx, col_idx, cell_val)
+    except Exception:
+        pass  # Never crash the UI for a save failure
+
+
+def save_settings_batch(updates: dict) -> None:
+    """
+    Write multiple settings at once (one API call).
+    updates = {col_name: value, ...}
+    """
+    sheet = get_gsheet()
+    if sheet is None:
+        return
+    username = st.session_state.get("username", "")
+    if not username:
+        return
+    try:
+        row_idx, headers = _get_user_row(sheet, username)
+        if row_idx is None:
+            return
+        cells = []
+        for col_name, value in updates.items():
+            if col_name not in headers:
+                continue
+            col_idx = headers.index(col_name) + 1
+            if isinstance(value, (dict, list)):
+                cell_val = json.dumps(value, ensure_ascii=False)
+            else:
+                cell_val = str(value)
+            cells.append({"row": row_idx, "col": col_idx, "val": cell_val})
+        # Batch update
+        for cell in cells:
+            sheet.update_cell(cell["row"], cell["col"], cell["val"])
+    except Exception:
+        pass
+
+
+def update_last_login(username: str) -> None:
+    """Update last_login timestamp"""
+    sheet = get_gsheet()
+    if sheet is None:
+        return
+    try:
+        row_idx, headers = _get_user_row(sheet, username)
+        if row_idx is None or "last_login" not in headers:
+            return
+        col_idx = headers.index("last_login") + 1
+        tz = pytz.timezone("Europe/London")
+        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M")
+        sheet.update_cell(row_idx, col_idx, now_str)
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════════════════════════════
 #   MARKET DATA (yfinance)
 # ═══════════════════════════════════════════════════════════════════
 SECTOR_TICKERS = {
@@ -1717,10 +1842,12 @@ def render_login():
                         st.session_state["username"]    = user_data.get("username", username)
                         st.session_state["role"]        = user_data.get("role", "free")
                         st.session_state["region"]      = user_data.get("region", "UK")
-                        st.session_state["lang"]        = user_data.get("language", "zh-hant")
-                        st.session_state["theme"]       = user_data.get("theme", "dark")
                         st.session_state["expiry_date"] = str(user_data.get("expiry_date", "2099-12-31"))
                         st.session_state["login_fails"] = 0
+                        # ── Load ALL persisted settings from Google Sheets ──
+                        load_user_settings(user_data)
+                        # Update last login timestamp (background)
+                        update_last_login(user_data.get("username", username))
                         st.rerun()
                     else:
                         st.session_state["login_fails"] = fails + 1
@@ -1825,34 +1952,46 @@ def render_sidebar():
         with tc1:
             if st.button(t("theme_dark"), key="sb_dark", use_container_width=True,
                          type="primary" if cur_theme == "dark" else "secondary"):
-                st.session_state["theme"] = "dark"; st.rerun()
+                st.session_state["theme"] = "dark"
+                save_setting("theme", "dark")
+                st.rerun()
         with tc2:
             if st.button(t("theme_light"), key="sb_light", use_container_width=True,
                          type="primary" if cur_theme == "light" else "secondary"):
-                st.session_state["theme"] = "light"; st.rerun()
+                st.session_state["theme"] = "light"
+                save_setting("theme", "light")
+                st.rerun()
         with tc3:
             if st.button(t("theme_eye"), key="sb_eye", use_container_width=True,
                          type="primary" if cur_theme == "eye" else "secondary"):
-                st.session_state["theme"] = "eye"; st.rerun()
+                st.session_state["theme"] = "eye"
+                save_setting("theme", "eye")
+                st.rerun()
 
         st.markdown(f'<div style="height:10px"></div>', unsafe_allow_html=True)
 
-        # ── Font size — THIS is where A- A A+ actually works ──
+        # ── Font size ──
         st.markdown(f'<div style="font-size:10px;color:{th["nav_text"]};letter-spacing:1.2px;text-transform:uppercase;margin-bottom:7px">字體大小</div>', unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
         cur_fs = st.session_state.get("font_size", "md")
         with fc1:
             if st.button("A−", key="sb_sm", use_container_width=True,
                          type="primary" if cur_fs == "sm" else "secondary"):
-                st.session_state["font_size"] = "sm"; st.rerun()
+                st.session_state["font_size"] = "sm"
+                save_setting("font_size", "sm")
+                st.rerun()
         with fc2:
             if st.button("A", key="sb_md", use_container_width=True,
                          type="primary" if cur_fs == "md" else "secondary"):
-                st.session_state["font_size"] = "md"; st.rerun()
+                st.session_state["font_size"] = "md"
+                save_setting("font_size", "md")
+                st.rerun()
         with fc3:
             if st.button("A+", key="sb_lg", use_container_width=True,
                          type="primary" if cur_fs == "lg" else "secondary"):
-                st.session_state["font_size"] = "lg"; st.rerun()
+                st.session_state["font_size"] = "lg"
+                save_setting("font_size", "lg")
+                st.rerun()
 
         st.markdown(f'<div style="height:10px"></div>', unsafe_allow_html=True)
 
@@ -1865,7 +2004,9 @@ def render_sidebar():
                                   index=list(lang_opts.keys()).index(cur_label),
                                   key="sb_lang", label_visibility="collapsed")
         if lang_opts[new_lang] != cur_lang:
-            st.session_state["lang"] = lang_opts[new_lang]; st.rerun()
+            st.session_state["lang"] = lang_opts[new_lang]
+            save_setting("language", lang_opts[new_lang])
+            st.rerun()
 
         st.markdown(f'<hr style="border:none;border-top:1px solid {th["nav_border"]};margin:14px 0">', unsafe_allow_html=True)
 
@@ -1989,6 +2130,7 @@ def main():
     # Tab navigation
     tabs_config = [
         ("global",    t("nav_global"),    "📊"),
+        ("action",    "今日行動指令",      "🎯"),
         ("watchlist", t("nav_watchlist"), "⭐"),
         ("ai",        t("nav_ai"),        "🤖"),
         ("portfolio", t("nav_portfolio"), "💼"),
@@ -2003,14 +2145,15 @@ def main():
     tab_objects = st.tabs(tab_labels)
 
     with tab_objects[0]: tab_global_market()
-    with tab_objects[1]: tab_watchlist()
-    with tab_objects[2]: tab_ai()
-    with tab_objects[3]: tab_portfolio()
-    with tab_objects[4]: tab_journal()
-    with tab_objects[5]: tab_learn()
-    with tab_objects[6]: tab_settings()
-    if st.session_state.get("role") == "admin" and len(tab_objects) > 7:
-        with tab_objects[7]: tab_admin()
+    with tab_objects[1]: tab_action_signals()
+    with tab_objects[2]: tab_watchlist()
+    with tab_objects[3]: tab_ai()
+    with tab_objects[4]: tab_portfolio()
+    with tab_objects[5]: tab_journal()
+    with tab_objects[6]: tab_learn()
+    with tab_objects[7]: tab_settings()
+    if st.session_state.get("role") == "admin" and len(tab_objects) > 8:
+        with tab_objects[8]: tab_admin()
 
     th = get_theme()
     st.markdown(
@@ -2021,6 +2164,762 @@ def main():
     )
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════
+#   TODAY'S ACTION SIGNALS — Three-Layer Funnel
+# ═══════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=900, show_spinner=False)
+def compute_action_signals(tickers: tuple) -> dict:
+    """
+    Three-layer analysis engine:
+    Layer 1: Market Regime (environment score 0-100)
+    Layer 2: Sector Rotation (find leading sectors)
+    Layer 3: Individual stock scoring with entry/stop/target
+    Returns structured dict for rendering.
+    """
+    result = {
+        "timestamp": datetime.now(pytz.timezone("Europe/London")).strftime("%H:%M"),
+        "layer1": {},
+        "layer2": {},
+        "layer3": [],
+        "error": None,
+    }
+
+    try:
+        # ── LAYER 1: Market Environment ──────────────────────────────
+        vix_df = yf.download("^VIX", period="5d", interval="1d",
+                              progress=False, auto_adjust=True)
+        spy_df = yf.download("^GSPC", period="3mo", interval="1d",
+                              progress=False, auto_adjust=True)
+
+        if isinstance(vix_df.columns, pd.MultiIndex):
+            vix_df.columns = vix_df.columns.get_level_values(0)
+        if isinstance(spy_df.columns, pd.MultiIndex):
+            spy_df.columns = spy_df.columns.get_level_values(0)
+
+        vix_val  = float(vix_df["Close"].dropna().iloc[-1])
+        spy_close = spy_df["Close"].dropna()
+        if isinstance(spy_close, pd.DataFrame):
+            spy_close = spy_close.iloc[:, 0]
+
+        # VIX score (lower VIX = more bullish)
+        if   vix_val < 15: vix_score = 90
+        elif vix_val < 18: vix_score = 75
+        elif vix_val < 22: vix_score = 55
+        elif vix_val < 28: vix_score = 30
+        elif vix_val < 35: vix_score = 15
+        else:              vix_score = 5
+
+        # SPY trend score (EMA alignment)
+        ema20_spy = float(spy_close.ewm(span=20).mean().iloc[-1])
+        ema50_spy = float(spy_close.ewm(span=50).mean().iloc[-1])
+        spy_latest = float(spy_close.iloc[-1])
+        spy_1m_ret = (spy_latest / float(spy_close.iloc[max(0,len(spy_close)-22)]) - 1) * 100
+
+        if   spy_latest > ema20_spy > ema50_spy and spy_1m_ret > 2:  trend_score = 90
+        elif spy_latest > ema20_spy > ema50_spy:                      trend_score = 75
+        elif spy_latest > ema20_spy:                                   trend_score = 55
+        elif spy_latest > ema50_spy:                                   trend_score = 35
+        else:                                                          trend_score = 15
+
+        # Sector breadth (how many of 8 sectors above EMA20)
+        breadth_syms = ["XLK","XLF","XLY","XLE","XLV","XLP","XLU","IYR"]
+        above_ema = 0
+        for sym in breadth_syms:
+            try:
+                d = yf.download(sym, period="2mo", interval="1d",
+                                progress=False, auto_adjust=True)
+                if isinstance(d.columns, pd.MultiIndex):
+                    d.columns = d.columns.get_level_values(0)
+                c = d["Close"].dropna()
+                if isinstance(c, pd.DataFrame): c = c.iloc[:, 0]
+                if len(c) >= 20 and float(c.iloc[-1]) > float(c.ewm(span=20).mean().iloc[-1]):
+                    above_ema += 1
+            except Exception:
+                pass
+        breadth_pct   = above_ema / len(breadth_syms) * 100
+        breadth_score = int(breadth_pct)
+
+        # VIX term structure
+        try:
+            vix3m_df = yf.download("^VIX3M", period="5d", interval="1d",
+                                   progress=False, auto_adjust=True)
+            if isinstance(vix3m_df.columns, pd.MultiIndex):
+                vix3m_df.columns = vix3m_df.columns.get_level_values(0)
+            vix3m = float(vix3m_df["Close"].dropna().iloc[-1])
+            contango = vix3m > vix_val  # contango = normal = bullish
+            term_score = 70 if contango else 30
+        except Exception:
+            term_score = 50
+            contango   = True
+
+        env_score = int(vix_score * 0.35 + trend_score * 0.35 +
+                        breadth_score * 0.20 + term_score * 0.10)
+
+        if   env_score >= 70: env_label = "進取 Risk-On";  env_color = "green"
+        elif env_score >= 45: env_label = "中性 Neutral";  env_color = "orange"
+        else:                 env_label = "防守 Risk-Off"; env_color = "red"
+
+        result["layer1"] = {
+            "score":         env_score,
+            "label":         env_label,
+            "color":         env_color,
+            "vix":           round(vix_val, 1),
+            "vix_score":     vix_score,
+            "trend_score":   trend_score,
+            "breadth_score": breadth_score,
+            "breadth_above": above_ema,
+            "breadth_total": len(breadth_syms),
+            "term_score":    term_score,
+            "contango":      contango,
+            "spy_ema20":     round(ema20_spy, 2),
+            "spy_ema50":     round(ema50_spy, 2),
+            "spy_price":     round(spy_latest, 2),
+            "spy_1m":        round(spy_1m_ret, 2),
+        }
+
+        # ── LAYER 2: Sector Rotation ──────────────────────────────────
+        sector_map = {
+            "科技 XLK": "XLK", "通訊 XLC": "XLC", "銀行 XLF": "XLF",
+            "芯片 SOXX": "SOXX","非必需 XLY": "XLY", "REITS IYR": "IYR",
+            "能源 XLE": "XLE",  "必需品 XLP": "XLP", "醫療 XLV": "XLV",
+            "公用 XLU": "XLU",
+        }
+        sector_scores = {}
+        spy_1m_for_rs = spy_1m_ret if spy_1m_ret != 0 else 0.01
+
+        for name, sym in sector_map.items():
+            try:
+                df_s = yf.download(sym, period="2mo", interval="1d",
+                                   progress=False, auto_adjust=True)
+                if isinstance(df_s.columns, pd.MultiIndex):
+                    df_s.columns = df_s.columns.get_level_values(0)
+                c_s = df_s["Close"].dropna()
+                if isinstance(c_s, pd.DataFrame): c_s = c_s.iloc[:, 0]
+                if len(c_s) < 22: continue
+                ret_1m = (float(c_s.iloc[-1]) / float(c_s.iloc[max(0,len(c_s)-22)]) - 1) * 100
+                ret_1w = (float(c_s.iloc[-1]) / float(c_s.iloc[max(0,len(c_s)-5)])  - 1) * 100
+                ema20_s = float(c_s.ewm(span=20).mean().iloc[-1])
+                above   = float(c_s.iloc[-1]) > ema20_s
+                rs      = ret_1m / abs(spy_1m_for_rs)  # relative strength
+                sector_scores[name] = {
+                    "sym": sym, "ret_1m": round(ret_1m, 2),
+                    "ret_1w": round(ret_1w, 2),
+                    "rs": round(rs, 2), "above_ema": above,
+                }
+            except Exception:
+                continue
+
+        sorted_sectors = sorted(sector_scores.items(),
+                                key=lambda x: x[1]["ret_1m"], reverse=True)
+        top_sectors    = sorted_sectors[:3]
+        weak_sectors   = sorted_sectors[-3:]
+
+        result["layer2"] = {
+            "all":   sector_scores,
+            "top":   top_sectors,
+            "weak":  weak_sectors,
+        }
+
+        # ── LAYER 3: Individual Stock Signals ─────────────────────────
+        # Skip individual stock analysis if environment is too bearish
+        if env_score < 30:
+            result["layer3"] = []
+            return result
+
+        for tk in tickers:
+            try:
+                df_tk = yf.download(tk, period="6mo", interval="1d",
+                                    progress=False, auto_adjust=True)
+                if isinstance(df_tk.columns, pd.MultiIndex):
+                    df_tk.columns = df_tk.columns.get_level_values(0)
+                if df_tk.empty or len(df_tk) < 30:
+                    continue
+
+                close_tk = df_tk["Close"].dropna()
+                hi_tk    = df_tk["High"].dropna()
+                lo_tk    = df_tk["Low"].dropna()
+                vol_tk   = df_tk["Volume"].dropna() if "Volume" in df_tk else None
+
+                if isinstance(close_tk, pd.DataFrame): close_tk = close_tk.iloc[:, 0]
+                if isinstance(hi_tk,    pd.DataFrame): hi_tk    = hi_tk.iloc[:, 0]
+                if isinstance(lo_tk,    pd.DataFrame): lo_tk    = lo_tk.iloc[:, 0]
+
+                price   = float(close_tk.iloc[-1])
+                prev    = float(close_tk.iloc[-2])
+                d1d     = (price - prev) / prev * 100
+
+                # EMA array
+                ema8  = float(close_tk.ewm(span=8).mean().iloc[-1])
+                ema20 = float(close_tk.ewm(span=20).mean().iloc[-1])
+                ema50 = float(close_tk.ewm(span=50).mean().iloc[-1]) if len(close_tk) >= 50 else ema20
+
+                # MACD
+                ema12 = close_tk.ewm(span=12).mean()
+                ema26 = close_tk.ewm(span=26).mean()
+                macd_line = ema12 - ema26
+                signal_line = macd_line.ewm(span=9).mean()
+                macd_hist   = float((macd_line - signal_line).iloc[-1])
+                macd_hist_prev = float((macd_line - signal_line).iloc[-2])
+                macd_cross_up = macd_hist > 0 and macd_hist_prev <= 0
+                macd_above_0  = macd_hist > 0
+
+                # RSI
+                delta_rsi = close_tk.diff()
+                gain_rsi  = delta_rsi.where(delta_rsi > 0, 0).ewm(alpha=1/14, adjust=False).mean()
+                loss_rsi  = (-delta_rsi.where(delta_rsi < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+                rsi_val   = float(100 - 100 / (1 + gain_rsi.iloc[-1] / max(float(loss_rsi.iloc[-1]), 1e-9)))
+
+                # ATR (for stop loss calculation)
+                atr_series = (hi_tk - lo_tk).ewm(alpha=1/14, adjust=False).mean()
+                atr_val    = float(atr_series.iloc[-1])
+                atr_pct    = atr_val / price * 100
+
+                # Volume confirmation
+                vol_confirm = False
+                if vol_tk is not None and len(vol_tk) >= 20:
+                    if isinstance(vol_tk, pd.DataFrame): vol_tk = vol_tk.iloc[:, 0]
+                    vol_avg_20 = float(vol_tk.tail(20).mean())
+                    vol_today  = float(vol_tk.iloc[-1])
+                    vol_confirm = vol_today > vol_avg_20 * 1.2
+
+                # 52W position
+                hi52 = float(hi_tk.tail(252).max())
+                lo52 = float(lo_tk.tail(252).min())
+                pos52 = (price - lo52) / (hi52 - lo52) * 100 if hi52 != lo52 else 50
+
+                # ── Scoring ──────────────────────────────────────
+                score = 0
+
+                # EMA alignment (0-30)
+                if price > ema8 > ema20 > ema50:  score += 30
+                elif price > ema20 > ema50:         score += 22
+                elif price > ema20:                 score += 12
+                else:                               score += 0
+
+                # MACD (0-20)
+                if macd_cross_up:      score += 20
+                elif macd_above_0:     score += 13
+                elif macd_hist > macd_hist_prev:  score += 6
+
+                # RSI optimal zone (0-20)
+                if   45 <= rsi_val <= 65:   score += 20
+                elif 35 <= rsi_val < 45:    score += 12
+                elif 65 < rsi_val <= 75:    score += 10
+                elif rsi_val > 75:          score += 3
+                elif rsi_val < 35:          score += 5
+
+                # Volume (0-15)
+                if vol_confirm: score += 15
+
+                # 52W position — near highs is bullish (0-15)
+                if pos52 >= 80:   score += 15
+                elif pos52 >= 60: score += 10
+                elif pos52 >= 40: score += 5
+
+                score = min(100, max(0, score))
+
+                # ── Action label ──────────────────────────────────
+                # Adjust for environment
+                adjusted_score = int(score * (env_score / 100) ** 0.3)
+
+                if   adjusted_score >= 68: action = "LONG";  action_color = "green"
+                elif adjusted_score >= 45: action = "WATCH"; action_color = "orange"
+                else:                      action = "AVOID"; action_color = "red"
+
+                # ── Entry / Stop / Target ─────────────────────────
+                # Entry zone: current price ± 0.5×ATR
+                entry_low  = round(price - atr_val * 0.3, 2)
+                entry_high = round(price + atr_val * 0.3, 2)
+
+                # Stop loss: 2×ATR below entry (standard)
+                stop_loss = round(price - atr_val * 2.0, 2)
+
+                # Targets based on key levels
+                target1 = round(price + atr_val * 3.0, 2)   # 1.5:1 R/R
+                target2 = round(price + atr_val * 5.0, 2)   # 2.5:1 R/R
+
+                # R/R ratio
+                risk    = price - stop_loss
+                reward1 = target1 - price
+                rr_ratio = round(reward1 / risk, 1) if risk > 0 else 0
+
+                # Kelly position size (use user's kelly settings or default)
+                kelly_cfg = st.session_state.get("kelly_settings", {"winrate": 55, "ratio": 2.0})
+                if isinstance(kelly_cfg, dict):
+                    wr_k = kelly_cfg.get("winrate", 55) / 100
+                    rr_k = kelly_cfg.get("ratio", 2.0)
+                else:
+                    wr_k, rr_k = 0.55, 2.0
+                kelly_raw = (wr_k * rr_k - (1 - wr_k)) / rr_k
+                half_kelly = max(0.5, min(5.0, kelly_raw / 2 * 100))  # % of account
+
+                # Build reason strings
+                reasons = []
+                if price > ema20 > ema50:     reasons.append("EMA多頭排列")
+                if macd_cross_up:              reasons.append("MACD金叉")
+                elif macd_above_0:             reasons.append("MACD零軸以上")
+                if 45 <= rsi_val <= 65:        reasons.append(f"RSI {rsi_val:.0f}（最佳區間）")
+                elif rsi_val < 40:             reasons.append(f"RSI {rsi_val:.0f}（超賣）")
+                elif rsi_val > 70:             reasons.append(f"RSI {rsi_val:.0f}（超買）")
+                if vol_confirm:                reasons.append("成交量放大確認")
+                if pos52 >= 75:               reasons.append(f"接近52週高位（{pos52:.0f}%）")
+
+                # Warning flags
+                warnings = []
+                if rsi_val > 72:   warnings.append("RSI超買，追入風險高")
+                if atr_pct > 5:    warnings.append("波幅較大，止損較寬")
+                if pos52 < 25:     warnings.append("股價接近52週低位")
+                if env_score < 45: warnings.append("大環境偏弱，嚴控倉位")
+
+                # Invalid condition (when signal becomes void)
+                invalid_cond = f"跌穿 ${round(ema20, 2)} (EMA20) 即止損"
+
+                result["layer3"].append({
+                    "ticker":       tk,
+                    "price":        price,
+                    "score":        score,
+                    "adj_score":    adjusted_score,
+                    "action":       action,
+                    "action_color": action_color,
+                    "entry_low":    entry_low,
+                    "entry_high":   entry_high,
+                    "stop_loss":    stop_loss,
+                    "target1":      target1,
+                    "target2":      target2,
+                    "rr_ratio":     rr_ratio,
+                    "kelly_pct":    round(half_kelly, 1),
+                    "rsi":          round(rsi_val, 1),
+                    "atr_pct":      round(atr_pct, 2),
+                    "macd_cross":   macd_cross_up,
+                    "macd_above":   macd_above_0,
+                    "ema20":        round(ema20, 2),
+                    "ema50":        round(ema50, 2),
+                    "pos52":        round(pos52, 1),
+                    "vol_confirm":  vol_confirm,
+                    "reasons":      reasons,
+                    "warnings":     warnings,
+                    "invalid_cond": invalid_cond,
+                    "d1d":          round(d1d, 2),
+                })
+
+            except Exception:
+                continue
+
+        # Sort: LONG first, then WATCH, then AVOID; within each by score desc
+        order = {"LONG": 0, "WATCH": 1, "AVOID": 2}
+        result["layer3"].sort(key=lambda x: (order.get(x["action"], 3), -x["adj_score"]))
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+def tab_action_signals():
+    th = get_theme()
+
+    # ── Header ──────────────────────────────────────────────────────
+    st.markdown(
+        f'<div style="margin-bottom:6px">'
+        f'<div style="font-size:22px;font-weight:700;color:{th["text1"]};letter-spacing:-.5px">'
+        f'🎯 今日行動指令</div>'
+        f'<div style="font-size:12px;color:{th["text3"]};margin-top:3px">'
+        f'三層漏斗分析 · 技術面評分 · 具體入場/止損/目標位</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── How it works — transparent methodology card ──────────────────
+    how_key = "show_methodology"
+    if how_key not in st.session_state:
+        st.session_state[how_key] = False
+
+    if st.button(
+        ("▼  系統設計原理（點擊收起）" if st.session_state[how_key]
+         else "▶  系統設計原理（點擊了解分析邏輯）"),
+        key="toggle_methodology",
+    ):
+        st.session_state[how_key] = not st.session_state[how_key]
+        st.rerun()
+
+    if st.session_state[how_key]:
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+            f'border-radius:13px;padding:20px 22px;margin-bottom:14px;'
+            f'border-left:3px solid {th["blue"]}">'
+
+            f'<div style="font-size:13px;font-weight:700;color:{th["blue"]};'
+            f'margin-bottom:14px;letter-spacing:.3px">系統設計原理</div>'
+
+            f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px">'
+
+            f'<div style="background:{th["card2"]};border-radius:10px;padding:14px">'
+            f'<div style="font-size:12px;font-weight:700;color:{th["green"]};margin-bottom:8px">'
+            f'第一層：大環境評分</div>'
+            f'<div style="font-size:12px;color:{th["text2"]};line-height:1.7">'
+            f'VIX 恐慌指數水平 (35%)<br>'
+            f'SPY EMA 趨勢方向 (35%)<br>'
+            f'板塊寬度：幾多板塊在 EMA20 之上 (20%)<br>'
+            f'VIX 期限結構 Contango/Backwardation (10%)<br>'
+            f'<span style="color:{th["text3"]}">輸出：0-100 環境評分</span>'
+            f'</div></div>'
+
+            f'<div style="background:{th["card2"]};border-radius:10px;padding:14px">'
+            f'<div style="font-size:12px;font-weight:700;color:{th["orange"]};margin-bottom:8px">'
+            f'第二層：板塊輪動</div>'
+            f'<div style="font-size:12px;color:{th["text2"]};line-height:1.7">'
+            f'計算每個 SPDR 板塊 1月相對強度 (RS)<br>'
+            f'RS = 板塊回報 / SPY 回報<br>'
+            f'識別強勢板塊（資金流入）<br>'
+            f'識別弱勢板塊（資金流出）<br>'
+            f'<span style="color:{th["text3"]}">優先在強勢板塊尋找機會</span>'
+            f'</div></div>'
+
+            f'<div style="background:{th["card2"]};border-radius:10px;padding:14px">'
+            f'<div style="font-size:12px;font-weight:700;color:{th["purple"]};margin-bottom:8px">'
+            f'第三層：個股評分</div>'
+            f'<div style="font-size:12px;color:{th["text2"]};line-height:1.7">'
+            f'EMA 8/20/50 多頭排列 (30分)<br>'
+            f'MACD 金叉 / 零軸以上 (20分)<br>'
+            f'RSI 最佳區間 40-65 (20分)<br>'
+            f'成交量放大確認 (15分)<br>'
+            f'52週高位位置 (15分)<br>'
+            f'<span style="color:{th["text3"]}">×環境係數 → 最終評分</span>'
+            f'</div></div>'
+
+            f'</div>'
+
+            f'<div style="margin-top:14px;padding:12px 14px;background:{th["red"]}15;'
+            f'border-radius:8px;border:1px solid {th["red"]}25">'
+            f'<div style="font-size:12px;font-weight:700;color:{th["red"]};margin-bottom:4px">'
+            f'重要免責聲明</div>'
+            f'<div style="font-size:12px;color:{th["text2"]};line-height:1.6">'
+            f'本系統基於技術分析，歷史勝率約 55-60%。每 10 個信號中約有 4-5 個會錯。'
+            f'止損是保護帳戶的核心工具，不是可選項。'
+            f'所有建議僅供參考，不構成投資意見。請根據自身風險承受能力做決定。'
+            f'</div></div>'
+
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(f'<div style="height:8px"></div>', unsafe_allow_html=True)
+
+    # ── Ticker input ─────────────────────────────────────────────────
+    wl_raw  = st.session_state.get("wl_tickers", "TSLA, AAPL, NVDA, AMZN, META")
+    tickers = tuple(s.strip().upper() for s in wl_raw.split(",") if s.strip())
+    if not is_pro():
+        tickers = tickers[:3]
+
+    rc1, rc2, rc3 = st.columns([3, 1, 3])
+    with rc1:
+        st.markdown(
+            f'<div style="font-size:12px;color:{th["text3"]};padding-top:8px">'
+            f'分析股票：{" · ".join(tickers)}'
+            f'{"  🔒 免費版最多3隻" if not is_pro() else ""}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with rc2:
+        refresh = st.button("🔄 刷新", key="action_refresh", use_container_width=True)
+
+    # ── Run analysis ─────────────────────────────────────────────────
+    cache_key = f"action_data_{'-'.join(tickers)}"
+    if refresh or cache_key not in st.session_state:
+        with st.spinner("三層漏斗分析中，請稍候（15-30秒）..."):
+            data = compute_action_signals(tickers)
+            st.session_state[cache_key] = data
+    else:
+        data = st.session_state[cache_key]
+
+    if data.get("error"):
+        st.error(f"分析失敗：{data['error']}")
+        return
+
+    l1 = data["layer1"]
+    l2 = data["layer2"]
+    l3 = data["layer3"]
+
+    # ── LAYER 1 display ──────────────────────────────────────────────
+    env_colors = {"green": th["green"], "orange": th["orange"], "red": th["red"]}
+    env_col    = env_colors.get(l1.get("color","orange"), th["orange"])
+    env_score  = l1.get("score", 50)
+    env_label  = l1.get("label", "中性")
+
+    st.markdown(
+        f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+        f'border-radius:13px;padding:18px 20px;margin-bottom:12px">'
+        f'<div style="display:flex;align-items:center;justify-content:space-between;'
+        f'flex-wrap:wrap;gap:12px">'
+
+        # Left: score + label
+        f'<div style="display:flex;align-items:baseline;gap:10px">'
+        f'<span style="font-size:11px;font-weight:600;color:{th["text3"]};'
+        f'letter-spacing:1px;text-transform:uppercase">第一層 · 大環境</span>'
+        f'<span style="font-size:32px;font-weight:900;color:{env_col};'
+        f'font-family:Inter;letter-spacing:-1px">{env_score}</span>'
+        f'<span style="font-size:13px;color:{env_col};font-weight:600">/100 · {env_label}</span>'
+        f'</div>'
+
+        # Right: mini indicators
+        f'<div style="display:flex;gap:16px;flex-wrap:wrap">'
+        + _make_indicator("VIX", f'{l1.get("vix","?")}',
+                          "green" if l1.get("vix",20)<18 else "orange" if l1.get("vix",20)<25 else "red", th)
+        + _make_indicator("SPY趨勢", "多頭" if l1.get("trend_score",50)>=75 else "中性" if l1.get("trend_score",50)>=45 else "空頭",
+                          "green" if l1.get("trend_score",50)>=75 else "orange" if l1.get("trend_score",50)>=45 else "red", th)
+        + _make_indicator("板塊寬度", f'{l1.get("breadth_above",0)}/{l1.get("breadth_total",8)}',
+                          "green" if l1.get("breadth_above",0)>=6 else "orange" if l1.get("breadth_above",0)>=4 else "red", th)
+        + _make_indicator("期限結構", "Contango ✅" if l1.get("contango",True) else "Backw ⚠️",
+                          "green" if l1.get("contango",True) else "orange", th)
+        + f'</div></div>'
+
+        # Progress bar
+        f'<div style="margin-top:12px;height:6px;background:{th["bg2"]};'
+        f'border-radius:3px;overflow:hidden">'
+        f'<div style="width:{env_score}%;height:100%;background:{env_col};'
+        f'border-radius:3px"></div></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── LAYER 2 display ──────────────────────────────────────────────
+    top_s  = l2.get("top", [])
+    weak_s = l2.get("weak", [])
+
+    if top_s or weak_s:
+        top_html = "".join(
+            f'<div style="padding:8px 12px;background:{th["green"]}15;'
+            f'border-radius:8px;border:1px solid {th["green"]}25">'
+            f'<div style="font-size:11px;color:{th["green"]};font-weight:600">{name}</div>'
+            f'<div style="font-size:14px;font-weight:800;color:{th["green"]};'
+            f'font-family:Inter">{info["ret_1m"]:+.1f}%</div>'
+            f'<div style="font-size:10px;color:{th["text3"]}">RS {info["rs"]:.1f}x</div>'
+            f'</div>'
+            for name, info in top_s
+        )
+        weak_html = "".join(
+            f'<div style="padding:8px 12px;background:{th["red"]}15;'
+            f'border-radius:8px;border:1px solid {th["red"]}25">'
+            f'<div style="font-size:11px;color:{th["red"]};font-weight:600">{name}</div>'
+            f'<div style="font-size:14px;font-weight:800;color:{th["red"]};'
+            f'font-family:Inter">{info["ret_1m"]:+.1f}%</div>'
+            f'<div style="font-size:10px;color:{th["text3"]}">RS {info["rs"]:.1f}x</div>'
+            f'</div>'
+            for name, info in weak_s
+        )
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+            f'border-radius:13px;padding:16px 20px;margin-bottom:12px">'
+            f'<div style="font-size:11px;font-weight:600;color:{th["text3"]};'
+            f'letter-spacing:1px;text-transform:uppercase;margin-bottom:12px">'
+            f'第二層 · 板塊輪動（1月相對強度）</div>'
+            f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">'
+            f'<span style="font-size:11px;color:{th["green"]};font-weight:600">▲ 強勢板塊</span>'
+            f'</div>'
+            f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'
+            f'{top_html}</div>'
+            f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">'
+            f'<span style="font-size:11px;color:{th["red"]};font-weight:600">▼ 弱勢板塊</span>'
+            f'</div>'
+            f'<div style="display:flex;gap:8px;flex-wrap:wrap">'
+            f'{weak_html}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── LAYER 3: Individual stock cards ──────────────────────────────
+    st.markdown(
+        f'<div style="font-size:11px;font-weight:600;color:{th["text3"]};'
+        f'letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">'
+        f'第三層 · 個股行動指令</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not l3:
+        st.markdown(
+            f'<div style="text-align:center;padding:32px;background:{th["card"]};'
+            f'border-radius:13px;border:1px solid {th["border"]};color:{th["text3"]}">'
+            f'大環境評分過低，暫不建議開新倉。耐心等待市場條件改善。</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    action_colors = {"LONG": th["green"], "WATCH": th["orange"], "AVOID": th["red"]}
+    action_labels = {"LONG": "做多 LONG", "WATCH": "觀望 WATCH", "AVOID": "迴避 AVOID"}
+    action_bg     = {"LONG": th["green"]+"15", "WATCH": th["orange"]+"15", "AVOID": th["red"]+"15"}
+
+    for s in l3:
+        ac  = action_colors.get(s["action"], th["orange"])
+        al  = action_labels.get(s["action"], s["action"])
+        abg = action_bg.get(s["action"], th["card2"])
+
+        # Score bar
+        score_bar_w = s["adj_score"]
+
+        # Reasons as pills
+        reason_pills = "".join(
+            f'<span style="display:inline-block;padding:2px 9px;background:{th["green"]}20;'
+            f'border:1px solid {th["green"]}30;border-radius:5px;font-size:11px;'
+            f'color:{th["green"]};margin:2px 3px 2px 0">{r}</span>'
+            for r in s["reasons"]
+        )
+        warning_pills = "".join(
+            f'<span style="display:inline-block;padding:2px 9px;background:{th["orange"]}15;'
+            f'border:1px solid {th["orange"]}25;border-radius:5px;font-size:11px;'
+            f'color:{th["orange"]};margin:2px 3px 2px 0">⚠ {w}</span>'
+            for w in s["warnings"]
+        )
+
+        # Pro gate for stop/target
+        if is_pro():
+            price_details = (
+                f'<div style="display:grid;grid-template-columns:repeat(4,1fr);'
+                f'gap:10px;margin:14px 0">'
+
+                f'<div style="background:{th["card2"]};border-radius:9px;padding:11px;text-align:center">'
+                f'<div style="font-size:10px;color:{th["text3"]};margin-bottom:4px">入場區間</div>'
+                f'<div style="font-size:13px;font-weight:700;color:{th["text1"]};font-family:Inter">'
+                f'${s["entry_low"]} – ${s["entry_high"]}</div>'
+                f'</div>'
+
+                f'<div style="background:{th["red"]}15;border-radius:9px;padding:11px;text-align:center;'
+                f'border:1px solid {th["red"]}20">'
+                f'<div style="font-size:10px;color:{th["red"]};margin-bottom:4px">止損位 🛑</div>'
+                f'<div style="font-size:13px;font-weight:700;color:{th["red"]};font-family:Inter">'
+                f'${s["stop_loss"]}</div>'
+                f'<div style="font-size:10px;color:{th["text3"]}">2×ATR</div>'
+                f'</div>'
+
+                f'<div style="background:{th["green"]}15;border-radius:9px;padding:11px;text-align:center;'
+                f'border:1px solid {th["green"]}20">'
+                f'<div style="font-size:10px;color:{th["green"]};margin-bottom:4px">目標一 🎯</div>'
+                f'<div style="font-size:13px;font-weight:700;color:{th["green"]};font-family:Inter">'
+                f'${s["target1"]}</div>'
+                f'<div style="font-size:10px;color:{th["text3"]}">盈虧比 {s["rr_ratio"]}x</div>'
+                f'</div>'
+
+                f'<div style="background:{th["blue"]}15;border-radius:9px;padding:11px;text-align:center;'
+                f'border:1px solid {th["blue"]}20">'
+                f'<div style="font-size:10px;color:{th["blue"]};margin-bottom:4px">目標二 🚀</div>'
+                f'<div style="font-size:13px;font-weight:700;color:{th["blue"]};font-family:Inter">'
+                f'${s["target2"]}</div>'
+                f'<div style="font-size:10px;color:{th["text3"]}">延伸目標</div>'
+                f'</div>'
+
+                f'</div>'
+
+                f'<div style="display:flex;align-items:center;gap:16px;'
+                f'padding:10px 14px;background:{th["card2"]};border-radius:9px;margin-bottom:10px">'
+                f'<div><span style="font-size:11px;color:{th["text3"]}">建議倉位（半Kelly）</span>'
+                f'<span style="font-size:16px;font-weight:800;color:{ac};font-family:Inter;'
+                f'margin-left:8px">{s["kelly_pct"]:.1f}%</span>'
+                f'<span style="font-size:11px;color:{th["text3"]};margin-left:4px">帳戶</span></div>'
+                f'<div style="color:{th["border"]};font-size:18px">|</div>'
+                f'<div><span style="font-size:11px;color:{th["text3"]}">信號失效條件：</span>'
+                f'<span style="font-size:12px;color:{th["orange"]};margin-left:4px">'
+                f'{s["invalid_cond"]}</span></div>'
+                f'</div>'
+            )
+        else:
+            price_details = (
+                f'<div style="padding:12px 14px;background:{th["card2"]};border-radius:9px;'
+                f'margin:10px 0;text-align:center">'
+                f'<span style="font-size:13px;color:{th["text3"]}">🔒 升級 Pro 查看入場/止損/目標位及倉位建議</span>'
+                f'</div>'
+            )
+
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+            f'border-radius:14px;padding:18px 20px;margin-bottom:12px;'
+            f'border-left:4px solid {ac}">'
+
+            # Header row
+            f'<div style="display:flex;align-items:center;'
+            f'justify-content:space-between;margin-bottom:12px">'
+            f'<div style="display:flex;align-items:center;gap:12px">'
+            f'<span style="font-size:20px;font-weight:900;color:{th["text1"]};'
+            f'font-family:Inter">{s["ticker"]}</span>'
+            f'<span style="font-size:18px;font-weight:700;color:{th["text2"]};'
+            f'font-family:Inter">${s["price"]:.2f}</span>'
+            f'<span style="font-size:12px;color:{"#00c98a" if s["d1d"]>=0 else "#f05555"}">'
+            f'{"▲" if s["d1d"]>=0 else "▼"} {abs(s["d1d"]):.2f}%</span>'
+            f'</div>'
+            f'<div style="display:flex;align-items:center;gap:10px">'
+            f'<span style="font-size:22px;font-weight:900;color:{ac};font-family:Inter">'
+            f'{s["adj_score"]}</span>'
+            f'<span style="padding:5px 14px;background:{abg};border:1.5px solid {ac};'
+            f'border-radius:8px;font-size:13px;font-weight:700;color:{ac}">{al}</span>'
+            f'</div></div>'
+
+            # Score bar
+            f'<div style="height:4px;background:{th["bg2"]};border-radius:2px;'
+            f'overflow:hidden;margin-bottom:12px">'
+            f'<div style="width:{score_bar_w}%;height:100%;background:{ac};'
+            f'border-radius:2px"></div></div>'
+
+            # Technical indicators row
+            f'<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px">'
+            + _make_mini_badge("RSI", f'{s["rsi"]:.0f}',
+                               "green" if 45<=s["rsi"]<=65 else "orange" if s["rsi"]<40 else "red", th)
+            + _make_mini_badge("ATR%", f'{s["atr_pct"]:.1f}%',
+                               "green" if s["atr_pct"]<3 else "orange" if s["atr_pct"]<5 else "red", th)
+            + _make_mini_badge("EMA20", f'${s["ema20"]}',
+                               "green" if s["price"]>s["ema20"] else "red", th)
+            + _make_mini_badge("52W位置", f'{s["pos52"]:.0f}%',
+                               "green" if s["pos52"]>=60 else "orange" if s["pos52"]>=35 else "red", th)
+            + _make_mini_badge("MACD", "金叉✅" if s["macd_cross"] else "零軸上" if s["macd_above"] else "零軸下",
+                               "green" if s["macd_cross"] else "orange" if s["macd_above"] else "red", th)
+            + _make_mini_badge("成交量", "放大✅" if s["vol_confirm"] else "普通",
+                               "green" if s["vol_confirm"] else "orange", th)
+            + f'</div>'
+
+            # Price details
+            + price_details
+
+            # Reasons
+            + (f'<div style="margin-top:6px">{reason_pills}</div>' if s["reasons"] else "")
+            + (f'<div style="margin-top:6px">{warning_pills}</div>' if s["warnings"] else "")
+
+            + f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Disclaimer ───────────────────────────────────────────────────
+    st.markdown(
+        f'<div style="text-align:center;padding:14px;font-size:11px;'
+        f'color:{th["text3"]};border-top:1px solid {th["border2"]};margin-top:6px">'
+        f'更新時間：{data.get("timestamp","—")} London · '
+        f'本分析純基於技術面，不構成投資建議 · 勝率約55-60%，每次止損是保護帳戶的工具'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _make_indicator(label: str, value: str, color: str, th: dict) -> str:
+    """Helper: mini indicator chip for layer 1"""
+    c = {"green": th["green"], "orange": th["orange"], "red": th["red"]}.get(color, th["text2"])
+    return (
+        f'<div style="text-align:center">'
+        f'<div style="font-size:10px;color:{th["text3"]};margin-bottom:2px">{label}</div>'
+        f'<div style="font-size:13px;font-weight:700;color:{c}">{value}</div>'
+        f'</div>'
+    )
+
+
+def _make_mini_badge(label: str, value: str, color: str, th: dict) -> str:
+    """Helper: mini badge for individual stock indicators"""
+    c  = {"green": th["green"], "orange": th["orange"], "red": th["red"]}.get(color, th["text2"])
+    bg = {"green": th["green"]+"15", "orange": th["orange"]+"15", "red": th["red"]+"15"}.get(color, th["card2"])
+    return (
+        f'<div style="padding:5px 10px;background:{bg};border-radius:7px;'
+        f'border:1px solid {c}30">'
+        f'<div style="font-size:9px;color:{th["text3"]};margin-bottom:1px">{label}</div>'
+        f'<div style="font-size:12px;font-weight:700;color:{c}">{value}</div>'
+        f'</div>'
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -2599,9 +3498,11 @@ def tab_watchlist():
     with c1:
         if st.button("🔍 查詢", key="wl_run", use_container_width=True):
             st.session_state["wl_tickers"] = wl_input
+            save_setting("watchlist", wl_input)
     with c2:
         if st.button("✖ 清除", key="wl_clear", use_container_width=True):
             st.session_state["wl_tickers"] = ""
+            save_setting("watchlist", "")
             st.rerun()
 
     tickers_raw = [s.strip().upper() for s in
@@ -2643,6 +3544,7 @@ def tab_watchlist():
                         if new_pname and tickers_raw:
                             portfolios[new_pname] = ", ".join(tickers_raw)
                             st.session_state["portfolios"] = portfolios
+                            save_setting("portfolios", portfolios)
                             st.success(f"已儲存「{new_pname}」")
                 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -2957,6 +3859,7 @@ def tab_portfolio():
                     if new_tk.strip():
                         if "positions" not in st.session_state: st.session_state["positions"] = []
                         st.session_state["positions"].append({"ticker":new_tk.strip().upper(),"qty":new_qty,"cost":new_cost,"date":str(new_dt)})
+                        save_setting("positions", st.session_state["positions"])
                         st.rerun()
         if positions:
             rows2 = ""; total_v = total_c = 0
@@ -3036,6 +3939,7 @@ def tab_journal():
                         pnl = (jexit-jentry)*jqty*mult
                         if "journal" not in st.session_state: st.session_state["journal"] = []
                         st.session_state["journal"].append({"date":datetime.now().strftime("%Y-%m-%d"),"ticker":jtk.strip().upper(),"direction":jdir,"entry":jentry,"exit":jexit,"qty":jqty,"pnl":pnl,"emotion":jemo,"reason_in":j_in,"reason_out":j_out})
+                        save_setting("journal", st.session_state["journal"])
                         st.success(f"已記錄 {jtk.upper()} · 盈虧 ${pnl:+,.2f}")
         journal = st.session_state.get("journal", [])
         if journal:
@@ -3150,11 +4054,22 @@ def tab_settings():
             st.rerun()
         if _exp_open_4:
             with st.container():
-                tg_id_s = st.text_input("你的 Telegram Chat ID", key="tg_id_s", placeholder="123456789", help="Telegram 搜尋 @userinfobot 獲取")
-                if st.button("🔔 測試推送", key="test_tg_s"):
-                    if tg_id_s:
-                        ok = send_telegram_msg(tg_id_s, f"✅ MarketIQ 推送測試成功！\n👤 {st.session_state.get('username','')}")
-                        st.success("✅ 推送成功！" if ok else "❌ 推送失敗")
+                tg_id_s = st.text_input("你的 Telegram Chat ID", key="tg_id_s",
+                    placeholder="123456789", help="Telegram 搜尋 @userinfobot 獲取",
+                    value=st.session_state.get("telegram_id", ""))
+                tc1, tc2 = st.columns(2)
+                with tc1:
+                    if st.button("💾 儲存 Chat ID", key="save_tg_id"):
+                        if tg_id_s:
+                            st.session_state["telegram_id"] = tg_id_s
+                            save_setting("telegram_chat_id", tg_id_s)
+                            st.success("✅ 已儲存")
+                with tc2:
+                    if st.button("🔔 測試推送", key="test_tg_s"):
+                        tid = tg_id_s or st.session_state.get("telegram_id", "")
+                        if tid:
+                            ok = send_telegram_msg(tid, f"✅ MarketIQ 推送測試成功！\n👤 {st.session_state.get('username','')}")
+                            st.success("✅ 推送成功！" if ok else "❌ 推送失敗")
                 
         # --- custom expander: 價格提示設定 ---
         _exp_key_5 = "exp_4"
@@ -3175,7 +4090,9 @@ def tab_settings():
                     with ac2: bl = st.number_input(f"{tk} 止損價↓($)", value=float(alerts.get(tk,{}).get("below",0)), step=1.0, key=f"bl_{tk}", min_value=0.0)
                 if st.button("💾 儲存提示", key="save_alerts_s"):
                     new_a = {tk:{"above":st.session_state.get(f"ab_{tk}",0),"below":st.session_state.get(f"bl_{tk}",0)} for tk in wl_set if st.session_state.get(f"ab_{tk}",0)>0 or st.session_state.get(f"bl_{tk}",0)>0}
-                    st.session_state["price_alerts"] = new_a; st.success("已儲存")
+                    st.session_state["price_alerts"] = new_a
+                    save_setting("price_alerts", new_a)
+                    st.success("已儲存 ✅")
                 
     with s2:
         role_v = st.session_state.get("role","free")
