@@ -1085,17 +1085,19 @@ def authenticate(username: str, password: str):
 
 # Column name → session_state key → default value → JSON?
 USER_SETTINGS_MAP = {
-    # col_name          ss_key              default                  is_json
-    "theme":           ("theme",            "dark",                  False),
-    "language":        ("lang",             "zh-hant",               False),
-    "font_size":       ("font_size",        "md",                    False),
-    "telegram_chat_id":("telegram_id",      "",                      False),
-    "watchlist":       ("wl_tickers",       "TSLA, AAPL, NVDA, AMZN, META", False),
-    "price_alerts":    ("price_alerts",     "{}",                    True),
-    "portfolios":      ("portfolios",       "{}",                    True),
-    "positions":       ("positions",        "[]",                    True),
-    "journal":         ("journal",          "[]",                    True),
-    "kelly_settings":  ("kelly_settings",   '{"winrate":55,"ratio":2.0}', True),
+    # col_name            ss_key              default                        is_json
+    "theme":             ("theme",            "dark",                        False),
+    "language":          ("lang",             "zh-hant",                     False),
+    "font_size":         ("font_size",        "md",                          False),
+    "telegram_chat_id":  ("telegram_id",      "",                            False),
+    "watchlist":         ("wl_tickers",       "TSLA, AAPL, NVDA, AMZN, META", False),
+    "price_alerts":      ("price_alerts",     "{}",                          True),
+    "portfolios":        ("portfolios",       "{}",                          True),
+    "positions":         ("positions",        "[]",                          True),
+    "journal":           ("journal",          "[]",                          True),
+    "kelly_settings":    ("kelly_settings",   '{"winrate":55,"ratio":2.0}',  True),
+    "push_time":         ("push_time",        "off",                         False),
+    "signal_history":    ("signal_history",   "[]",                          True),
 }
 
 
@@ -2887,6 +2889,125 @@ def tab_action_signals():
             unsafe_allow_html=True,
         )
 
+
+    # ── AI One-Sentence Summary (Pro) ────────────────────────────────
+    if is_pro() and l3:
+        st.markdown(f'<div style="height:8px"></div>', unsafe_allow_html=True)
+        ai_key = f"action_ai_{'-'.join(tickers)}"
+
+        if st.button("🤖 生成 AI 一句話總結", key="action_ai_btn"):
+            used = st.session_state.get("ai_calls_today", 0)
+            limit = 9999 if st.session_state.get("role") == "admin" else 20
+            if used >= limit:
+                st.error("今日 AI 調用已達上限")
+            else:
+                with st.spinner("AI 分析中..."):
+                    top_s_for_ai = [(n, info["ret_1m"]) for n, info in l2.get("top", [])]
+                    lang_inst = {
+                        "zh-hant": "請用繁體中文回答，一句話，直接給出操作建議。",
+                        "zh-hans": "请用简体中文回答，一句话，直接给出操作建议。",
+                        "en": "Respond in English, one sentence, give a direct actionable recommendation.",
+                    }.get(st.session_state.get("lang", "zh-hant"), "請用繁體中文回答，一句話。")
+
+                    top_str = "、".join(f"{n}({v:+.1f}%)" for n, v in top_s_for_ai) if top_s_for_ai else "無"
+                    long_tks  = [s["ticker"] for s in l3 if s["action"] == "LONG"]
+                    watch_tks = [s["ticker"] for s in l3 if s["action"] == "WATCH"]
+
+                    prompt = f"""
+市場環境：{l1.get('label','中性')} VIX {l1.get('vix',20)} 環境評分 {l1.get('score',50)}/100
+強勢板塊：{top_str}
+做多信號：{', '.join(long_tks) if long_tks else '無'}
+觀望信號：{', '.join(watch_tks) if watch_tks else '無'}
+
+{lang_inst}
+"""
+                    import requests as _req
+                    try:
+                        r = _req.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {st.secrets['groq']['api_key']}",
+                                     "Content-Type": "application/json"},
+                            json={"model": "llama-3.3-70b-versatile",
+                                  "max_tokens": 120, "temperature": 0.3,
+                                  "messages": [
+                                      {"role": "system", "content": "你是一位精簡的市場策略師。"},
+                                      {"role": "user",   "content": prompt},
+                                  ]},
+                            timeout=20,
+                        )
+                        r.raise_for_status()
+                        ai_result = r.json()["choices"][0]["message"]["content"].strip()
+                        st.session_state[ai_key] = ai_result
+                        st.session_state["ai_calls_today"] = used + 1
+                    except Exception as e:
+                        st.error(f"AI 分析失敗: {str(e)[:80]}")
+
+        if ai_key in st.session_state:
+            st.markdown(
+                f'<div style="background:{th["green"]}12;border:1px solid {th["green"]}30;'
+                f'border-radius:12px;padding:14px 18px;margin-top:4px">'
+                f'<div style="font-size:10px;color:{th["green"]};font-weight:700;'
+                f'letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px">💡 AI 一句話建議</div>'
+                f'<div style="font-size:15px;color:{th["text1"]};line-height:1.6;font-weight:500">'
+                f'{st.session_state[ai_key]}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Telegram push button
+            tg_id = st.session_state.get("telegram_id", "")
+            if tg_id:
+                if st.button("📱 推送今日信號至 Telegram", key="action_tg_push"):
+                    _push_action_to_telegram(tg_id, l1, l2, l3,
+                                              st.session_state.get(ai_key, ""))
+            else:
+                st.caption("💡 在「個人設定」設定 Telegram Chat ID 即可啟用推送")
+
+    # ── Signal History ───────────────────────────────────────────────
+    history = st.session_state.get("signal_history", [])
+    if history and is_pro():
+        st.markdown(f'<div style="height:12px"></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="font-size:11px;font-weight:600;color:{th["text3"]};'
+            f'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">'
+            f'📋 歷史信號記錄（最近30天）</div>',
+            unsafe_allow_html=True,
+        )
+        rows_h = ""
+        for entry in reversed(history[-14:]):
+            env_s  = entry.get("env", 50)
+            env_c  = th["green"] if env_s >= 70 else th["orange"] if env_s >= 45 else th["red"]
+            sigs_h = entry.get("signals", [])
+            sig_pills = "".join(
+                f'<span style="display:inline-block;padding:1px 7px;margin:1px 2px;'
+                f'border-radius:4px;font-size:10px;font-weight:700;'
+                f'background:{"#00c98a" if s["action"]=="LONG" else "#f0a030" if s["action"]=="WATCH" else "#f05555"}20;'
+                f'color:{"#00c98a" if s["action"]=="LONG" else "#f0a030" if s["action"]=="WATCH" else "#f05555"}">'
+                f'{s["ticker"]} {s["action"]}</span>'
+                for s in sigs_h[:5]
+            )
+            rows_h += (
+                f'<div style="display:flex;align-items:center;gap:12px;'
+                f'padding:8px 0;border-bottom:1px solid {th["border2"]};flex-wrap:wrap">'
+                f'<span style="font-size:11px;color:{th["text3"]};min-width:72px">'
+                f'{entry.get("date","")}</span>'
+                f'<span style="font-size:12px;font-weight:700;color:{env_c};min-width:32px">'
+                f'{env_s}</span>'
+                f'<div style="flex:1">{sig_pills}</div>'
+                f'</div>'
+            )
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+            f'border-radius:12px;padding:14px 18px">'
+            f'<div style="display:flex;gap:16px;font-size:10px;color:{th["text3"]};'
+            f'padding-bottom:6px;border-bottom:1px solid {th["border"]};margin-bottom:4px">'
+            f'<span style="min-width:72px">日期</span>'
+            f'<span style="min-width:32px">環境</span>'
+            f'<span>信號</span></div>'
+            f'{rows_h}</div>',
+            unsafe_allow_html=True,
+        )
+
     # ── Disclaimer ───────────────────────────────────────────────────
     st.markdown(
         f'<div style="text-align:center;padding:14px;font-size:11px;'
@@ -2896,6 +3017,40 @@ def tab_action_signals():
         f'</div>',
         unsafe_allow_html=True,
     )
+
+
+def _push_action_to_telegram(tg_id: str, l1: dict, l2: dict,
+                              l3: list, ai_summary: str) -> None:
+    """Push today's action signals to user's Telegram"""
+    th   = get_theme()
+    lang = st.session_state.get("lang", "zh-hant")
+    uname = st.session_state.get("username", "")
+    from datetime import datetime as _dt
+    now_str = _dt.now(pytz.timezone("Europe/London")).strftime("%Y-%m-%d %H:%M")
+
+    env_col = {"green": "🟢", "orange": "🟡", "red": "🔴"}.get(l1.get("color","orange"), "🟡")
+    top_sectors = [(n, info["ret_1m"]) for n, info in l2.get("top", [])]
+    top_str = "  ".join(f"{n} {v:+.1f}%" for n, v in top_sectors) if top_sectors else "—"
+
+    msg = f"📊 *MarketIQ 今日行動指令*\n👤 {uname} · {now_str} London\n\n"
+    msg += f"*大環境* {env_col} 評分 {l1.get('score',50)}/100  VIX {l1.get('vix',20)}\n\n"
+    msg += f"*強勢板塊* 🔥 {top_str}\n\n"
+    msg += "*個股信號*\n"
+    for s in l3[:6]:
+        e = "🟢" if s["action"]=="LONG" else "🟡" if s["action"]=="WATCH" else "🔴"
+        line = f"{e} *{s['ticker']}* ${s['price']}  {s['action']} {s['adj_score']}分\n"
+        if s["action"] == "LONG":
+            line += f"   止損 ${s['stop_loss']}  目標 ${s['target1']}  盈虧比 {s['rr_ratio']}x\n"
+        msg += line
+    if ai_summary:
+        msg += f"\n💡 *AI 建議*\n{ai_summary}\n"
+    msg += "\n_數據僅供參考，不構成投資建議 · MarketIQ_"
+
+    ok = send_telegram_msg(tg_id, msg)
+    if ok:
+        st.success("✅ 已推送至 Telegram")
+    else:
+        st.error("❌ 推送失敗，請在個人設定檢查 Chat ID")
 
 
 def _make_indicator(label: str, value: str, color: str, th: dict) -> str:
@@ -4331,6 +4486,67 @@ def tab_settings():
                         if tid:
                             ok = send_telegram_msg(tid, f"✅ MarketIQ 推送測試成功！\n👤 {st.session_state.get('username','')}")
                             st.success("✅ 推送成功！" if ok else "❌ 推送失敗")
+
+                st.markdown(f'<div style="height:10px"></div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="font-size:12px;font-weight:600;color:{th["text2"]};'
+                    f'margin-bottom:6px">📅 每日自動推送時間</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # Region → timezone label
+                region = st.session_state.get("region", "UK")
+                tz_label = {
+                    "HK": "香港時間 HKT", "CN": "北京時間 CST",
+                    "UK": "倫敦時間 GMT/BST", "US": "紐約時間 ET",
+                    "TW": "台灣時間 CST", "SG": "新加坡時間 SGT",
+                }.get(region, "當地時間")
+
+                cur_push = st.session_state.get("push_time", "off")
+
+                push_options = ["off (關閉)"] + [f"{h:02d}:00" for h in range(24)]
+                push_labels  = {
+                    "off": "off (關閉)",
+                    **{f"{h:02d}:00": f"{h:02d}:00" for h in range(24)}
+                }
+                cur_label = push_labels.get(cur_push, "off (關閉)")
+                try:
+                    cur_idx = push_options.index(cur_label)
+                except ValueError:
+                    cur_idx = 0
+
+                selected_push = st.selectbox(
+                    f"推送時間（{tz_label}）",
+                    push_options,
+                    index=cur_idx,
+                    key="push_time_sel",
+                    help="GitHub Actions 每小時整點檢查，到達設定時間即自動推送",
+                )
+                push_val = "off" if selected_push.startswith("off") else selected_push[:5]
+
+                if st.button("💾 儲存推送時間", key="save_push_time"):
+                    st.session_state["push_time"] = push_val
+                    save_setting("push_time", push_val)
+                    if push_val == "off":
+                        st.success("✅ 已關閉自動推送")
+                    else:
+                        st.success(f"✅ 已設定每天 {push_val} ({tz_label}) 自動推送")
+
+                if cur_push != "off":
+                    st.markdown(
+                        f'<div style="padding:8px 12px;background:{th["green"]}15;'
+                        f'border:1px solid {th["green"]}25;border-radius:8px;'
+                        f'font-size:12px;color:{th["green"]};margin-top:6px">'
+                        f'✅ 已設定每天 {cur_push} ({tz_label}) 自動推送今日行動指令至 Telegram</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f'<div style="padding:8px 12px;background:{th["card2"]};'
+                        f'border-radius:8px;font-size:12px;color:{th["text3"]};margin-top:6px">'
+                        f'💤 自動推送已關閉</div>',
+                        unsafe_allow_html=True,
+                    )
                 
         # --- custom expander: 價格提示設定 ---
         _exp_key_5 = "exp_4"
