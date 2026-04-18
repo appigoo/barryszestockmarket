@@ -1192,51 +1192,53 @@ def fetch_vix_term():
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_watchlist_signals(tickers: list):
-    """Compute simple signal score (0-100) for watchlist"""
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_watchlist_signals(tickers: tuple):
+    """Compute signal score (0-100) for watchlist tickers"""
     out = []
     for tk in tickers:
         try:
             df = yf.download(tk, period="3mo", interval="1d",
-                            progress=False, auto_adjust=True)
-            if df.empty or len(df) < 30:
+                             progress=False, auto_adjust=True)
+            if df.empty or len(df) < 20:
                 continue
+            # Flatten MultiIndex columns if present
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
             close = df["Close"].dropna()
             if isinstance(close, pd.DataFrame):
                 close = close.iloc[:, 0]
+            if len(close) < 10:
+                continue
 
             latest = float(close.iloc[-1])
+            if latest <= 0:
+                continue
 
-            # EMA 20 vs 50
-            ema20 = close.ewm(span=20).mean().iloc[-1]
-            ema50 = close.ewm(span=50).mean().iloc[-1] if len(close) >= 50 else ema20
+            # EMA trend
+            ema20 = float(close.ewm(span=20).mean().iloc[-1])
+            ema50 = float(close.ewm(span=50).mean().iloc[-1]) if len(close) >= 50 else ema20
             trend_score = 35 if latest > ema20 > ema50 else (15 if latest > ema20 else 0)
 
-            # RSI(14)
+            # RSI
             delta = close.diff()
-            gain = delta.where(delta > 0, 0).rolling(14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-            rs = gain / (loss.replace(0, np.nan))
-            rsi = (100 - 100 / (1 + rs)).iloc[-1]
-            if pd.isna(rsi):
-                rsi = 50
-            mom_score = 30 if 50 < rsi < 70 else (20 if 40 < rsi <= 50 else (10 if rsi >= 70 else 5))
+            gain  = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
+            loss  = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+            rsi   = float(100 - 100 / (1 + gain.iloc[-1] / max(float(loss.iloc[-1]), 1e-9)))
+            if pd.isna(rsi): rsi = 50
+            mom_score = 30 if 50 < rsi < 70 else (20 if 40 < rsi <= 50 else 10 if rsi >= 70 else 5)
 
-            # Volatility (lower = better short-term)
-            atr = (df["High"] - df["Low"]).rolling(14).mean().iloc[-1]
-            atr_pct = float(atr) / latest * 100 if latest else 5
-            if isinstance(atr_pct, pd.Series):
-                atr_pct = float(atr_pct.iloc[0])
+            # ATR volatility
+            hi = df["High"].dropna()
+            lo = df["Low"].dropna()
+            if isinstance(hi, pd.DataFrame): hi = hi.iloc[:, 0]
+            if isinstance(lo, pd.DataFrame): lo = lo.iloc[:, 0]
+            atr     = float((hi - lo).ewm(alpha=1/14, adjust=False).mean().iloc[-1])
+            atr_pct = atr / latest * 100
             vol_score = 35 if atr_pct < 2 else (25 if atr_pct < 4 else 15)
 
-            score = int(trend_score + mom_score + vol_score)
-            score = max(0, min(100, score))
-
-            out.append({
-                "ticker": tk,
-                "price": latest,
-                "score": score,
-            })
+            score = max(0, min(100, trend_score + mom_score + vol_score))
+            out.append({"ticker": tk, "price": latest, "score": score})
         except Exception:
             continue
     return out
@@ -2145,9 +2147,13 @@ def tab_global_market():
         # ── BOTTOM ROW: Watchlist + Regime + VIX ──
         bot_col1, bot_col2, bot_col3 = st.columns(3)
 
-        # Default watchlist
-        default_watchlist = ["TSLA", "NVDA", "AAPL", "META", "AMZN"]
-        signals = fetch_watchlist_signals(default_watchlist)
+        # Read user's actual watchlist from session state
+        wl_raw = st.session_state.get("wl_tickers", "TSLA, NVDA, AAPL, META, AMZN")
+        actual_watchlist = [s.strip().upper() for s in wl_raw.split(",") if s.strip()][:5]
+        if not actual_watchlist:
+            actual_watchlist = ["TSLA", "NVDA", "AAPL", "META", "AMZN"]
+
+        signals = fetch_watchlist_signals(tuple(actual_watchlist))
 
         with bot_col1:
             sig_parts = []
@@ -2157,19 +2163,19 @@ def tab_global_market():
                     badge_cls = "b-buy"
                     badge_txt = t("buy")
                     dot_color = th["green"]
-                    sc_color = th["green"]
+                    sc_color  = th["green"]
                     glow = f"box-shadow:0 0 5px {th['green']}"
                 elif sc >= 45:
                     badge_cls = "b-watch"
                     badge_txt = t("watch")
                     dot_color = th["orange"]
-                    sc_color = th["orange"]
+                    sc_color  = th["orange"]
                     glow = ""
                 else:
                     badge_cls = "b-avoid"
                     badge_txt = t("avoid")
                     dot_color = th["red"]
-                    sc_color = th["red"]
+                    sc_color  = th["red"]
                     glow = f"box-shadow:0 0 5px {th['red']}"
 
                 price_str = f"{s['price']:.2f}"
@@ -2186,15 +2192,21 @@ def tab_global_market():
                     f'</div>'
                     f'</div>'
                 )
-            sig_inline = "".join(sig_parts)
-            wl_title = t("watchlist_signals")
+
+            sig_inline = "".join(sig_parts) if sig_parts else (
+                f'<div style="padding:20px 0;text-align:center;color:{th["text3"]};font-size:13px">'
+                f'數據載入中，請稍候...</div>'
+            )
+            wl_title  = t("watchlist_signals")
             entry_lbl = t("entry_score")
+            tickers_shown = " · ".join(actual_watchlist)
             st.markdown(
                 f'<div class="ds-card">'
                 f'<div class="card-hd">'
                 f'<div class="card-title">{wl_title}</div>'
                 f'<span class="card-pill">{entry_lbl}</span>'
                 f'</div>'
+                f'<div style="font-size:10px;color:{th["text3"]};margin-bottom:8px">{tickers_shown}</div>'
                 f'{sig_inline}'
                 f'</div>',
                 unsafe_allow_html=True,
@@ -2858,7 +2870,7 @@ def tab_ai():
             st.markdown(f'<div style="padding:8px 12px;background:{th["red"]}15;border-radius:8px;border:1px solid {th["red"]}33"><div style="font-size:12px;color:{th["red"]}">{name}</div><div style="font-size:14px;font-weight:700;color:{th["red"]};font-family:Inter">{fmt_pct(val)}</div></div>', unsafe_allow_html=True)
         st.markdown('</div></div>', unsafe_allow_html=True)
         wl_tks3 = [s.strip().upper() for s in st.session_state.get("wl_tickers","TSLA,NVDA,AAPL").split(",") if s.strip()][:5]
-        sigs3 = sorted(fetch_watchlist_signals(wl_tks3), key=lambda x: x["score"], reverse=True)
+        sigs3 = sorted(fetch_watchlist_signals(tuple(wl_tks3)), key=lambda x: x["score"], reverse=True)
         st.markdown(f'<div style="background:{th["card"]};border:1px solid {th["border"]};border-radius:13px;padding:16px"><div style="font-size:11px;color:{th["text3"]};font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px">第三層：個股機會</div>', unsafe_allow_html=True)
         for s in sigs3[:3]:
             sc = s["score"]
@@ -2897,7 +2909,7 @@ def tab_ai():
                     top3 = sorted(sd3.items(),key=lambda x:x[1],reverse=True)[:3]
                     wk3  = sorted(sd3.items(),key=lambda x:x[1])[:3]
                     wl3  = [s.strip().upper() for s in st.session_state.get("wl_tickers","TSLA,NVDA,AAPL").split(",") if s.strip()][:5]
-                    sigs3b = fetch_watchlist_signals(wl3)
+                    sigs3b = fetch_watchlist_signals(tuple(wl3))
                     sig_str = "\n".join(f"  {s['ticker']}: 評分{s['score']} ${s['price']:.2f}" for s in sigs3b)
                     lang_n3 = {"zh-hant":"繁體中文","zh-hans":"简体中文","en":"English"}.get(st.session_state.get("lang","zh-hant"),"繁體中文")
                     p3 = f"用{lang_n3}提供完整投資建議報告。\n大環境：{t(reg3.get('regime','neutral'))} VIX:{reg3.get('vix',20):.1f} 動能:{reg3.get('momentum',50)}/100\n強勢板塊：{','.join(k+' '+fmt_pct(v) for k,v in top3)}\n弱勢板塊：{','.join(k+' '+fmt_pct(v) for k,v in wk3)}\n自選股票信號：\n{sig_str}\n請提供：1.市場總結(3句) 2.推薦板塊及理由 3.個股機會排名 4.風險提示(3點) 5.整體操作策略"
