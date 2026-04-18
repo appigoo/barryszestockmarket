@@ -683,13 +683,15 @@ def inject_css():
 # ═══════════════════════════════════════════════════════════════════
 @st.cache_resource
 def get_gsheet():
-    """Connect to Google Sheets. Falls back to local mock if not configured."""
+    """Connect to Google Sheets."""
     try:
         creds_json = st.secrets["google_sheets"]["credentials"]
         if isinstance(creds_json, str):
             creds_dict = json.loads(creds_json)
         else:
-            creds_dict = dict(creds_json)
+            # Streamlit toml nested table → convert to plain dict recursively
+            creds_dict = {k: str(v) if not isinstance(v, dict) else dict(v)
+                          for k, v in dict(creds_json).items()}
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
@@ -699,7 +701,69 @@ def get_gsheet():
         sheet_id = st.secrets["google_sheets"]["spreadsheet_id"]
         return client.open_by_key(sheet_id).sheet1
     except Exception as e:
+        # Store error for display in admin tab
+        import streamlit as _st
+        _st.session_state["gsheet_error"] = str(e)
         return None
+
+
+def debug_gsheet_connection():
+    """Show detailed connection diagnostics in admin tab"""
+    th = get_theme()
+    err = st.session_state.get("gsheet_error", "")
+
+    # Check secrets structure
+    checks = []
+
+    # 1. Check google_sheets section exists
+    try:
+        _ = st.secrets["google_sheets"]
+        checks.append(("✅", "Secrets 包含 [google_sheets] 區段"))
+    except Exception:
+        checks.append(("❌", "Secrets 缺少 [google_sheets] 區段"))
+
+    # 2. Check spreadsheet_id
+    try:
+        sid = st.secrets["google_sheets"]["spreadsheet_id"]
+        checks.append(("✅", f"spreadsheet_id 已設定：{sid[:20]}..."))
+    except Exception:
+        checks.append(("❌", "缺少 spreadsheet_id"))
+
+    # 3. Check credentials
+    try:
+        creds_raw = st.secrets["google_sheets"]["credentials"]
+        creds_type = type(creds_raw).__name__
+        if isinstance(creds_raw, str):
+            parsed = json.loads(creds_raw)
+            checks.append(("✅", f"credentials 係 JSON 字串，已解析（type: {parsed.get('type','?')}）"))
+        else:
+            parsed = dict(creds_raw)
+            checks.append(("✅", f"credentials 係 TOML 表格（type: {parsed.get('type','?')}）"))
+        # Check required fields
+        for field in ["type","project_id","private_key","client_email"]:
+            if field in parsed:
+                val = str(parsed[field])
+                display = val[:30] + "..." if len(val) > 30 else val
+                checks.append(("✅", f"credentials.{field} = {display}"))
+            else:
+                checks.append(("❌", f"credentials 缺少 {field}"))
+    except Exception as ex:
+        checks.append(("❌", f"credentials 解析失敗: {ex}"))
+
+    # 4. Show connection error if any
+    if err:
+        checks.append(("❌", f"連接錯誤: {err}"))
+
+    html = ""
+    for icon, msg in checks:
+        color = th["green"] if icon == "✅" else th["red"]
+        html += (
+            f'<div style="padding:7px 12px;margin-bottom:4px;'
+            f'background:{th["card2"]};border-radius:7px;'
+            f'font-size:12px;color:{th["text1"]}">'
+            f'<span style="color:{color};margin-right:8px">{icon}</span>{msg}</div>'
+        )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # Local fallback users for development / when Google Sheets unavailable
@@ -2421,6 +2485,8 @@ def tab_admin():
     sheet = get_gsheet()
     if sheet is None:
         st.warning("Google Sheets 未連接，顯示本地測試數據")
+        with st.expander("🔍 連接診斷（點擊展開）", expanded=True):
+            debug_gsheet_connection()
         users_list = [{"username":k,"role":v["role"],"expiry_date":v.get("expiry_date","—"),"status":v.get("status","active"),"region":v.get("region","UK"),"ai_calls_today":0} for k,v in FALLBACK_USERS.items()]
     else:
         try: users_list = sheet.get_all_records()
