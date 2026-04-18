@@ -452,9 +452,24 @@ def inject_css():
         width: {sb_w} !important;
         overflow: hidden !important;
     }}
-    /* Hide sidebar collapse button completely */
-    button[data-testid="collapsedControl"] {{
+    /* ── Completely remove native sidebar collapse button + hover text ── */
+    button[data-testid="collapsedControl"],
+    button[data-testid="collapsedControl"] *,
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapseButton"] * {{
         display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        width: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        pointer-events: none !important;
+        position: absolute !important;
+        clip: rect(0,0,0,0) !important;
+    }}
+    /* Hide the Material Icons font text that shows on hover */
+    section[data-testid="stSidebar"] > div:first-child {{
+        padding-top: 0 !important;
     }}
     /* Sidebar text color override */
     section[data-testid="stSidebar"] p,
@@ -1434,7 +1449,14 @@ def render_login():
     #MainMenu, footer, header, .stDeployButton { visibility: hidden; }
     /* Hide sidebar on login page */
     section[data-testid="stSidebar"] { display: none !important; }
-    button[data-testid="collapsedControl"] { display: none !important; }
+    button[data-testid="collapsedControl"],
+    button[data-testid="collapsedControl"] *,
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapseButton"] * {
+        display: none !important; visibility: hidden !important;
+        width: 0 !important; height: 0 !important;
+        pointer-events: none !important;
+    }
     [data-testid="stVerticalBlock"] { gap: 0 !important; }
     [data-testid="stHorizontalBlock"] { gap: 0 !important; }
 
