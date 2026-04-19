@@ -3407,15 +3407,35 @@ def fetch_cot_data() -> dict:
     try:
         nasdaq_key = st.secrets["nasdaq"]["api_key"]
 
-        # S&P 500 E-mini futures COT
-        # CFTC dataset on Nasdaq Data Link
-        url = (
-            "https://data.nasdaq.com/api/v3/datasets/CFTC/133741_FO_L_ALL.json"
-            f"?rows=52&api_key={nasdaq_key}"
-        )
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()["dataset"]
+        # S&P 500 E-mini futures COT data on Nasdaq Data Link
+        # Correct dataset codes (try multiple in case one fails):
+        # CFTC/13874_FO_L_ALL  = S&P 500 Futures + Options, Long format
+        # CFTC/13874_F_L_ALL   = S&P 500 Futures Only, Long format
+        # CFTC/13874_F_ALL     = S&P 500 Futures Only, All columns
+        dataset_ids = [
+            "CFTC/13874_FO_L_ALL",
+            "CFTC/13874_F_L_ALL",
+            "CFTC/13874_F_ALL",
+        ]
+
+        data = None
+        used_dataset = ""
+        for ds_id in dataset_ids:
+            try:
+                url = (
+                    f"https://data.nasdaq.com/api/v3/datasets/{ds_id}.json"
+                    f"?rows=52&api_key={nasdaq_key}"
+                )
+                r = requests.get(url, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()["dataset"]
+                    used_dataset = ds_id
+                    break
+            except Exception:
+                continue
+
+        if data is None:
+            raise ValueError(f"All COT dataset IDs failed: {dataset_ids}")
         cols = data["column_names"]
         rows = data["data"]
 
@@ -3467,6 +3487,7 @@ def fetch_cot_data() -> dict:
             "date":         date_latest,
             "history":      [int(v) for v in net_series.tail(26).tolist()],
             "note":         "大型機構（Large Speculators）S&P500期貨淨多倉，52週指數化",
+            "dataset":      used_dataset,
         }
     except Exception as e:
         return {
@@ -3480,136 +3501,152 @@ def fetch_cot_data() -> dict:
 def fetch_trigger_assessment() -> dict:
     """
     Layer 2: AI assessment of whether current market trigger is reversible.
-    Step 1: Use Groq with web_search tool to get real-time market news.
-    Step 2: Ask Groq to assess reversibility based on actual current events.
+    Uses Groq with today's date in system prompt so it uses its latest knowledge.
+    Also tries to fetch real news from RSS feeds as additional context.
     """
+    today    = datetime.now(pytz.timezone("Europe/London")).strftime("%Y-%m-%d")
+    groq_key = None
     try:
         groq_key = st.secrets["groq"]["api_key"]
+    except Exception:
+        pass
 
-        # ── Step 1: Fetch real-time news via Groq web_search tool ──
-        today = datetime.now(pytz.timezone("Europe/London")).strftime("%Y-%m-%d")
-        search_r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {groq_key}",
-                     "Content-Type": "application/json"},
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "max_tokens": 500,
-                "temperature": 0.1,
-                "tools": [{"type": "web_search_preview"}],
-                "tool_choice": "auto",
-                "messages": [{
-                    "role": "user",
-                    "content": (
-                        f"Today is {today}. Search for the top 3 current macro risks "
-                        f"affecting US stock markets right now. "
-                        f"What are the main geopolitical, economic or policy events "
-                        f"causing market volatility this week? "
-                        f"List them briefly in 3 bullet points."
-                    )
-                }],
-            },
-            timeout=30,
+    if not groq_key:
+        return {
+            "type": "mixed", "confidence": 50,
+            "main_factor": "Groq API Key 未設定",
+            "reasoning": "請在 Streamlit Secrets 設定 groq.api_key。",
+            "label": "混合型 🟡", "status": "orange",
+        }
+
+    # ── Try fetching real news from RSS feeds ──────────────────────
+    news_headlines = ""
+    news_source_name = "Groq knowledge"
+    news_urls = [
+        ("Reuters Business",
+         "https://feeds.reuters.com/reuters/businessNews", "xml"),
+        ("FT Markets",
+         "https://www.ft.com/markets?format=rss", "xml"),
+        ("WSJ Markets",
+         "https://feeds.a.dj.com/rss/RSSMarketsMain.xml", "xml"),
+    ]
+    import re as _re
+    for src_name, feed_url, fmt in news_urls:
+        try:
+            rr = requests.get(feed_url, timeout=8,
+                              headers={"User-Agent": "MarketIQ/1.0"})
+            if rr.status_code == 200 and len(rr.text) > 200:
+                titles = _re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", rr.text)
+                if not titles:
+                    titles = _re.findall(r"<title>(.*?)</title>", rr.text)
+                titles = [t.strip() for t in titles[1:6] if t.strip()]
+                if titles:
+                    news_headlines = "\n".join(f"• {t}" for t in titles)
+                    news_source_name = src_name
+                    break
+        except Exception:
+            continue
+
+    # ── Build prompt ───────────────────────────────────────────────
+    if news_headlines:
+        context = f"今日實時新聞標題（{today}，來源：{news_source_name}）:\n{news_headlines}"
+    else:
+        context = (
+            f"今日日期：{today}。請根據你最新的訓練知識，"
+            f"判斷{today}前後全球市場最主要的宏觀風險。"
+            f"特別關注：地緣政治衝突（美伊、以巴、俄烏等）、"
+            f"央行政策、貿易戰、銀行危機等。"
         )
-        search_r.raise_for_status()
-        search_data    = search_r.json()
-        news_content   = ""
-        for choice in search_data.get("choices", []):
-            msg = choice.get("message", {})
-            if msg.get("content"):
-                news_content = msg["content"]
-                break
-            # tool_calls path
-            for tc in msg.get("tool_calls", []):
-                if tc.get("type") == "web_search_preview":
-                    news_content += tc.get("function", {}).get("output", "")
 
-        if not news_content:
-            news_content = f"Current date: {today}. Major macro risks include geopolitical tensions and monetary policy uncertainty."
+    prompt = f"""{context}
 
-        # ── Step 2: Assess reversibility based on real news ──
-        assess_prompt = f"""
-你是一位宏觀經濟分析師。根據以下實時新聞，判斷當前市場下跌的主要觸發因素是否「可撤回」。
-
-今日日期：{today}
-當前市場狀況（來自實時搜索）：
-{news_content}
+根據以上背景，判斷當前市場下跌的主要觸發因素的可逆性：
 
 判斷標準：
-- 「可撤回」：觸發因素可通過談判、政策調整、外交斡旋解決（如：貿易戰、關稅、利率政策）
-- 「不可撤回」：觸發因素涉及結構性破壞，無法短期逆轉（如：銀行體系崩潰、主權債務危機、大規模戰爭擴散）
-- 「混合型」：部分可撤回，部分結構性
+- reversible（可撤回）：可通過談判/政策調整解決。如關稅戰、利率政策
+- irreversible（不可撤回）：結構性破壞。如銀行體系崩潰、主權債務危機
+- mixed（混合型）：部分可撤回。如地區戰爭（可停火但地緣風險持續）、複合型危機
 
-戰爭注意：地區性軍事衝突（如美伊、以巴）通常屬於「混合型」，可通過停火談判部分撤回，但地緣政治風險溢價難以完全消除。
+注意：地區性軍事衝突（美伊、以巴）= mixed，因為可停火但地緣風險溢價持續。
 
-嚴格只輸出JSON，不要任何其他文字：
+只輸出JSON物件，不含任何其他文字：
 {{
-  "type": "reversible" 或 "irreversible" 或 "mixed",
-  "confidence": 0到100的整數,
-  "main_factor": "主要觸發因素（一句話，反映當前真實情況）",
-  "reasoning": "判斷理由（2句話，基於上方新聞）",
-  "label": "可撤回 🟢" 或 "不可撤回 🔴" 或 "混合型 🟡"
-}}
-"""
-        assess_r = requests.post(
+  "type": "mixed",
+  "confidence": 70,
+  "main_factor": "反映{today}真實情況的一句話",
+  "reasoning": "兩句判斷理由",
+  "label": "混合型 🟡"
+}}"""
+
+    try:
+        r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {groq_key}",
                      "Content-Type": "application/json"},
             json={
                 "model": "llama-3.3-70b-versatile",
-                "max_tokens": 350,
+                "max_tokens": 280,
                 "temperature": 0.1,
                 "messages": [
-                    {"role": "system", "content": "你是精確的宏觀分析師。嚴格只輸出JSON，不含任何其他文字或markdown。"},
-                    {"role": "user",   "content": assess_prompt},
+                    {"role": "system",
+                     "content": (
+                         f"你是宏觀分析師。今天是{today}。"
+                         "只輸出JSON，type只能是reversible/irreversible/mixed，"
+                         "label對應 可撤回 🟢/不可撤回 🔴/混合型 🟡。"
+                         "不含任何markdown或額外文字。"
+                     )},
+                    {"role": "user", "content": prompt},
                 ],
             },
-            timeout=20,
+            timeout=25,
         )
-        assess_r.raise_for_status()
-        content = assess_r.json()["choices"][0]["message"]["content"].strip()
+        r.raise_for_status()
+        raw = r.json()["choices"][0]["message"]["content"].strip()
 
-        # Clean JSON — handle markdown code blocks
-        if "```" in content:
-            parts = content.split("```")
-            for part in parts:
-                part = part.strip().lstrip("json").strip()
-                if part.startswith("{"):
-                    content = part
+        # Robust JSON extraction
+        if "```" in raw:
+            for part in raw.split("```"):
+                p = part.strip().lstrip("json").strip()
+                if p.startswith("{"):
+                    raw = p
                     break
-        # Find first { to last }
-        start = content.find("{")
-        end   = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            content = content[start:end]
+        s = raw.find("{"); e = raw.rfind("}") + 1
+        if s >= 0 and e > s:
+            raw = raw[s:e]
 
-        result = json.loads(content)
-
-        # Map type to status color
-        type_map = {
+        result = json.loads(raw)
+        type_to = {
             "reversible":   ("green",  "可撤回 🟢"),
             "irreversible": ("red",    "不可撤回 🔴"),
             "mixed":        ("orange", "混合型 🟡"),
         }
-        status, default_label = type_map.get(result.get("type","mixed"), ("orange","混合型 🟡"))
-        result["status"] = status
+        st_, lbl_ = type_to.get(result.get("type","mixed"), ("orange","混合型 🟡"))
+        result["status"]      = st_
+        result["date_used"]   = today
+        result["news_source"] = news_source_name
         if not result.get("label"):
-            result["label"] = default_label
-        result["news_used"] = news_content[:200] + "..." if len(news_content) > 200 else news_content
-
+            result["label"] = lbl_
         return result
 
-    except Exception as e:
-        # Fallback: use today's date in error message so it's not always "關稅"
-        today_fb = datetime.now(pytz.timezone("Europe/London")).strftime("%Y-%m-%d")
+    except json.JSONDecodeError:
+        import re as re2
+        t_m = re2.search(r'"type"\s*:\s*"(\w+)"', raw if "raw" in dir() else "")
+        f_m = re2.search(r'"main_factor"\s*:\s*"([^"]+)"', raw if "raw" in dir() else "")
+        t   = t_m.group(1) if t_m else "mixed"
+        tp  = {"reversible":("green","可撤回 🟢"),"irreversible":("red","不可撤回 🔴"),"mixed":("orange","混合型 🟡")}
+        st_, lbl_ = tp.get(t, ("orange","混合型 🟡"))
         return {
-            "type":        "mixed",
-            "confidence":  50,
-            "main_factor": f"實時新聞獲取失敗，請手動評估（{today_fb}）",
-            "reasoning":   "AI搜索暫時不可用。請根據當前市場新聞自行判斷觸發因素是否可撤回。",
-            "label":       "混合型 🟡",
-            "status":      "orange",
-            "error":       str(e),
+            "type": t, "confidence": 55,
+            "main_factor": f_m.group(1) if f_m else f"{today} 宏觀風險（解析失敗，請刷新）",
+            "reasoning": "AI 返回格式有誤，請點擊「刷新數據」重試。",
+            "label": lbl_, "status": st_, "date_used": today,
+        }
+    except Exception as ex:
+        return {
+            "type": "mixed", "confidence": 45,
+            "main_factor": f"AI 連接失敗（{today}）",
+            "reasoning": f"請檢查 Groq API Key 並點擊「刷新數據」重試。{str(ex)[:50]}",
+            "label": "混合型 🟡", "status": "orange", "date_used": today,
         }
 
 
