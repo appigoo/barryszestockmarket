@@ -2133,6 +2133,7 @@ def main():
     tabs_config = [
         ("global",    t("nav_global"),    "📊"),
         ("action",    "今日行動指令",      "🎯"),
+        ("macro",     "宏觀判斷",          "🌐"),
         ("watchlist", t("nav_watchlist"), "⭐"),
         ("ai",        t("nav_ai"),        "🤖"),
         ("portfolio", t("nav_portfolio"), "💼"),
@@ -2148,14 +2149,15 @@ def main():
 
     with tab_objects[0]: tab_global_market()
     with tab_objects[1]: tab_action_signals()
-    with tab_objects[2]: tab_watchlist()
-    with tab_objects[3]: tab_ai()
-    with tab_objects[4]: tab_portfolio()
-    with tab_objects[5]: tab_journal()
-    with tab_objects[6]: tab_learn()
-    with tab_objects[7]: tab_settings()
-    if st.session_state.get("role") == "admin" and len(tab_objects) > 8:
-        with tab_objects[8]: tab_admin()
+    with tab_objects[2]: tab_macro_dashboard()
+    with tab_objects[3]: tab_watchlist()
+    with tab_objects[4]: tab_ai()
+    with tab_objects[5]: tab_portfolio()
+    with tab_objects[6]: tab_journal()
+    with tab_objects[7]: tab_learn()
+    with tab_objects[8]: tab_settings()
+    if st.session_state.get("role") == "admin" and len(tab_objects) > 9:
+        with tab_objects[9]: tab_admin()
 
     th = get_theme()
     st.markdown(
@@ -3074,6 +3076,814 @@ def _make_mini_badge(label: str, value: str, color: str, th: dict) -> str:
         f'<div style="font-size:9px;color:{th["text3"]};margin-bottom:1px">{label}</div>'
         f'<div style="font-size:12px;font-weight:700;color:{c}">{value}</div>'
         f'</div>'
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+#   MACRO DASHBOARD — 宏觀恐慌 vs 結構性熊市 五層判斷系統
+# ═══════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_hy_spread() -> dict:
+    """
+    Layer 1: High Yield Credit Spread
+    Proxy: HYG/LQD ratio — when ratio falls, spreads widen (risk-off)
+    Also fetch HYG and LQD prices for spread approximation.
+    Real spread = (LQD yield - HYG yield) but we use price ratio as proxy.
+    """
+    try:
+        import yfinance as yf
+        # HYG = iShares High Yield Corp Bond ETF
+        # LQD = iShares Investment Grade Corp Bond ETF
+        # BAMLH0A0HYM2 proxy: use HYG vs LQD relative performance
+        df = yf.download(["HYG", "LQD", "^VIX"], period="2y",
+                         interval="1d", progress=False, auto_adjust=True)
+        if isinstance(df.columns, pd.MultiIndex):
+            closes = df["Close"].dropna()
+        else:
+            closes = df[["Close"]].dropna()
+
+        hyg = closes["HYG"].dropna()
+        lqd = closes["LQD"].dropna()
+
+        # Spread proxy: invert HYG/LQD ratio, normalize to bps-like scale
+        # When spreads widen: HYG falls relative to LQD
+        ratio = (hyg / lqd).dropna()
+        ratio_min  = float(ratio.min())
+        ratio_max  = float(ratio.max())
+        ratio_cur  = float(ratio.iloc[-1])
+        ratio_prev = float(ratio.iloc[-2])
+
+        # Normalize: map ratio to approximate bps
+        # Historical: 2020 COVID peak ~1100bps, 2008 ~2182bps
+        # Normal range: ~280-400bps
+        # We map ratio percentile to bps range
+        pct = (ratio_max - ratio_cur) / (ratio_max - ratio_min)  # 0=tight, 1=wide
+        approx_bps = int(250 + pct * 1800)  # 250bps tight → 2050bps crisis
+
+        # 3-week change
+        ratio_3w_ago = float(ratio.iloc[max(0, len(ratio)-16)])
+        bps_3w_ago   = int(250 + ((ratio_max - ratio_3w_ago) / (ratio_max - ratio_min)) * 1800)
+        bps_change   = approx_bps - bps_3w_ago
+
+        # Also get actual HYG 1-month performance as context
+        hyg_1m = (float(hyg.iloc[-1]) / float(hyg.iloc[max(0,len(hyg)-22)]) - 1) * 100
+
+        # Status
+        if   approx_bps < 350:  status = "green";  label = "正常 · 市場平靜"
+        elif approx_bps < 450:  status = "orange"; label = "偏高 · 注意觀察"
+        elif approx_bps < 700:  status = "orange"; label = "警戒 · 市場緊張"
+        else:                   status = "red";    label = "危險 · 金融壓力"
+
+        return {
+            "bps":        approx_bps,
+            "bps_change": bps_change,
+            "bps_3w_ago": bps_3w_ago,
+            "hyg_1m":     round(hyg_1m, 2),
+            "status":     status,
+            "label":      label,
+            "history":    [int(250 + ((ratio_max - float(r)) / max(ratio_max - ratio_min, 0.001)) * 1800)
+                           for r in ratio.tail(60).tolist()],
+            "threshold_warn":   450,
+            "threshold_danger": 700,
+            "crisis_2020":      1100,
+            "crisis_2008":      2182,
+        }
+    except Exception as e:
+        return {"error": str(e), "bps": 320, "status": "orange",
+                "label": "數據獲取失敗", "bps_change": 0, "history": []}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_recession_prob() -> dict:
+    """
+    Layer 3: Recession probability from Polymarket
+    Endpoint: US recession by end of 2026
+    """
+    try:
+        # Polymarket API - search for recession market
+        # Using the public Gamma API
+        url = "https://gamma-api.polymarket.com/markets"
+        params = {
+            "q": "US recession 2026",
+            "limit": 5,
+            "active": "true",
+        }
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        markets = r.json()
+
+        prob = None
+        market_title = ""
+        for m in markets:
+            title = m.get("question", m.get("title", "")).lower()
+            if "recession" in title and ("2026" in title or "2025" in title):
+                # outcome prices
+                outcomes = m.get("outcomePrices", m.get("outcomes", []))
+                tokens   = m.get("tokens", [])
+                if tokens:
+                    for tok in tokens:
+                        if "yes" in str(tok.get("outcome","")).lower():
+                            prob = float(tok.get("price", 0.5)) * 100
+                            break
+                elif outcomes:
+                    try:
+                        prob = float(outcomes[0]) * 100
+                    except Exception:
+                        pass
+                market_title = m.get("question", m.get("title", ""))
+                if prob is not None:
+                    break
+
+        if prob is None:
+            # Fallback: try direct slug
+            r2 = requests.get(
+                "https://gamma-api.polymarket.com/markets",
+                params={"slug": "will-the-us-enter-a-recession-in-2026"},
+                timeout=10
+            )
+            data2 = r2.json()
+            if data2:
+                tokens2 = data2[0].get("tokens", [])
+                for tok in tokens2:
+                    if "yes" in str(tok.get("outcome","")).lower():
+                        prob = float(tok.get("price", 0.35)) * 100
+                        break
+
+        if prob is None:
+            prob = 25.0  # last known value as fallback
+
+        if   prob < 30: status = "green";  label = f"低衰退風險 {prob:.0f}%"
+        elif prob < 50: status = "orange"; label = f"中度衰退風險 {prob:.0f}%"
+        else:           status = "red";    label = f"高衰退風險 {prob:.0f}%"
+
+        return {
+            "prob":         round(prob, 1),
+            "status":       status,
+            "label":        label,
+            "market_title": market_title or "US Recession by end of 2026",
+            "source":       "Polymarket",
+        }
+    except Exception as e:
+        return {
+            "prob": 25.0, "status": "green",
+            "label": "低衰退風險 25%（備用數據）",
+            "market_title": "US Recession 2026",
+            "source": "Polymarket（連接失敗，使用備用）",
+            "error": str(e),
+        }
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_bank_health() -> dict:
+    """
+    Layer 4: Bank health via FMP API
+    Fetch Non-Performing Loans ratio and key metrics from JPM, C, WFC, BAC
+    """
+    try:
+        fmp_key = st.secrets["fmp"]["api_key"]
+        banks   = {"JPM": "摩根大通", "C": "花旗", "WFC": "富國銀行", "BAC": "美國銀行"}
+        results = {}
+
+        for sym, name in banks.items():
+            try:
+                # Key metrics
+                url = f"https://financialmodelingprep.com/api/v3/key-metrics/{sym}?period=annual&limit=2&apikey={fmp_key}"
+                r   = requests.get(url, timeout=10)
+                r.raise_for_status()
+                data = r.json()
+                if not data:
+                    continue
+                latest = data[0]
+                prev   = data[1] if len(data) > 1 else data[0]
+
+                # Use NPL proxy: loan loss provisions / revenue
+                # FMP provides: nonPerformingLoansToTotalGrossLoans (if available)
+                npl_ratio   = latest.get("nonPerformingLoansToTotalGrossLoans", None)
+                if npl_ratio is None:
+                    # Proxy: use debtToEquity as financial health indicator
+                    npl_ratio = latest.get("debtToEquity", 0)
+                    is_proxy  = True
+                else:
+                    is_proxy  = False
+
+                # Get income statement for provision data
+                url2  = f"https://financialmodelingprep.com/api/v3/income-statement/{sym}?period=annual&limit=2&apikey={fmp_key}"
+                r2    = requests.get(url2, timeout=10)
+                inc   = r2.json()
+                provision_ratio = None
+                if inc and len(inc) >= 1:
+                    rev      = inc[0].get("revenue", 1)
+                    prov     = inc[0].get("provisionForCreditLosses",
+                               inc[0].get("creditLossProvision", 0)) or 0
+                    if rev and rev > 0:
+                        provision_ratio = round(prov / rev * 100, 2)
+
+                results[sym] = {
+                    "name":     name,
+                    "npl":      round(float(npl_ratio or 0), 3),
+                    "is_proxy": is_proxy,
+                    "prov_pct": provision_ratio,
+                    "period":   latest.get("date", "N/A"),
+                }
+            except Exception:
+                results[sym] = {"name": name, "npl": None, "prov_pct": None, "period": "N/A"}
+
+        # Overall health assessment
+        prov_vals = [v["prov_pct"] for v in results.values()
+                     if v.get("prov_pct") is not None]
+        avg_prov  = sum(prov_vals) / len(prov_vals) if prov_vals else None
+
+        if avg_prov is None:        status = "orange"; label = "數據待更新"
+        elif avg_prov < 3:          status = "green";  label = "信貸健康穩定 ✅"
+        elif avg_prov < 6:          status = "orange"; label = "信貸壓力上升 ⚠️"
+        else:                       status = "red";    label = "信貸惡化警告 🚨"
+
+        return {
+            "banks":    results,
+            "avg_prov": round(avg_prov, 2) if avg_prov else None,
+            "status":   status,
+            "label":    label,
+            "note":     "撥備率 = 信貸損失撥備 / 總收入，反映銀行對壞賬的預期",
+        }
+    except Exception as e:
+        return {
+            "banks": {}, "avg_prov": None,
+            "status": "orange", "label": "FMP API 連接失敗",
+            "error": str(e),
+        }
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def fetch_cot_data() -> dict:
+    """
+    Layer 5: COT (Commitment of Traders) data via Nasdaq Data Link
+    Dataset: CFTC/110741_FO_L_ALL (S&P 500 futures - Large Speculators)
+    """
+    try:
+        nasdaq_key = st.secrets["nasdaq"]["api_key"]
+
+        # S&P 500 E-mini futures COT
+        # CFTC dataset on Nasdaq Data Link
+        url = (
+            "https://data.nasdaq.com/api/v3/datasets/CFTC/133741_FO_L_ALL.json"
+            f"?rows=52&api_key={nasdaq_key}"
+        )
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()["dataset"]
+        cols = data["column_names"]
+        rows = data["data"]
+
+        df_cot = pd.DataFrame(rows, columns=cols)
+        df_cot["Date"] = pd.to_datetime(df_cot["Date"])
+        df_cot = df_cot.sort_values("Date")
+
+        # Large Speculators Net = Long - Short
+        # Column names vary; find long/short columns
+        long_col  = next((c for c in cols if "Lrg Spec Long"  in c or "Large Spec Long"  in c), None)
+        short_col = next((c for c in cols if "Lrg Spec Short" in c or "Large Spec Short" in c), None)
+
+        if long_col and short_col:
+            df_cot["net"] = df_cot[long_col] - df_cot[short_col]
+        else:
+            # Try generic column detection
+            num_cols = [c for c in cols if c != "Date" and df_cot[c].dtype in [float, int]]
+            if len(num_cols) >= 2:
+                df_cot["net"] = df_cot[num_cols[0]] - df_cot[num_cols[1]]
+            else:
+                raise ValueError("Cannot find Long/Short columns in COT data")
+
+        net_series = df_cot["net"].dropna()
+        cur_net    = float(net_series.iloc[-1])
+        prev_net   = float(net_series.iloc[-2])
+        net_min_52 = float(net_series.min())
+        net_max_52 = float(net_series.max())
+
+        # COT Index (0-100): where is current net vs 52-week range
+        cot_range = net_max_52 - net_min_52
+        cot_index = int((cur_net - net_min_52) / cot_range * 100) if cot_range != 0 else 50
+
+        # Sentiment: high COT index = institutions very long = bullish
+        if   cot_index >= 70: status = "green";  label = f"機構大幅看多 {cot_index}/100"
+        elif cot_index >= 40: status = "orange"; label = f"機構中性 {cot_index}/100"
+        else:                 status = "red";    label = f"機構看空 {cot_index}/100"
+
+        date_latest = df_cot["Date"].iloc[-1].strftime("%Y-%m-%d")
+        net_change  = int(cur_net - prev_net)
+
+        return {
+            "cot_index":    cot_index,
+            "net":          int(cur_net),
+            "net_change":   net_change,
+            "net_min_52":   int(net_min_52),
+            "net_max_52":   int(net_max_52),
+            "status":       status,
+            "label":        label,
+            "date":         date_latest,
+            "history":      [int(v) for v in net_series.tail(26).tolist()],
+            "note":         "大型機構（Large Speculators）S&P500期貨淨多倉，52週指數化",
+        }
+    except Exception as e:
+        return {
+            "cot_index": 50, "net": 0, "net_change": 0,
+            "status": "orange", "label": "COT 數據獲取失敗",
+            "error": str(e),
+        }
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def fetch_trigger_assessment() -> dict:
+    """
+    Layer 2: AI assessment of whether current market trigger is reversible
+    Uses Groq to analyze current macro context
+    """
+    try:
+        groq_key = st.secrets["groq"]["api_key"]
+        prompt = """
+你是一位宏觀經濟分析師。根據2026年4月的市場情況，判斷以下問題：
+
+當前主要市場下跌觸發因素（2025-2026）：
+1. 美國關稅政策不確定性
+2. 聯儲局維持高利率
+3. 中東地緣政治
+4. AI泡沫擔憂
+
+請判斷這些因素屬於「可撤回」還是「不可撤回」類型？
+
+回答格式（嚴格遵守JSON）：
+{
+  "type": "reversible" 或 "irreversible",
+  "confidence": 0-100,
+  "main_factor": "主要觸發因素（一句話）",
+  "reasoning": "判斷理由（2句話）",
+  "label": "可撤回 🟢" 或 "不可撤回 🔴" 或 "混合型 🟡"
+}
+
+只回答JSON，不要其他內容。
+"""
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {groq_key}",
+                     "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile", "max_tokens": 300,
+                  "temperature": 0.2,
+                  "messages": [
+                      {"role": "system", "content": "你是一位精確的宏觀分析師，只輸出JSON。"},
+                      {"role": "user",   "content": prompt},
+                  ]},
+            timeout=20,
+        )
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"].strip()
+        # Clean JSON
+        if "```" in content:
+            content = content.split("```")[1].replace("json", "").strip()
+        result = json.loads(content)
+        result["status"] = "green" if result.get("type") == "reversible" else \
+                           "red"   if result.get("type") == "irreversible" else "orange"
+        return result
+    except Exception as e:
+        return {
+            "type":        "reversible",
+            "confidence":  65,
+            "main_factor": "關稅政策不確定性（可談判）",
+            "reasoning":   "當前觸發因素主要為政策性，可透過談判或政策調整撤回。",
+            "label":       "可撤回 🟢",
+            "status":      "green",
+            "error":       str(e),
+        }
+
+
+def _macro_score_to_verdict(scores: list) -> tuple[str, str, str]:
+    """
+    Aggregate 5 layer scores into overall verdict.
+    scores: list of ("green"/"orange"/"red") for each layer
+    Returns: (verdict_label, verdict_color, strategy)
+    """
+    green_count  = scores.count("green")
+    red_count    = scores.count("red")
+    orange_count = scores.count("orange")
+
+    if red_count >= 3:
+        return "結構性熊市風險", "red", "🔴 建議大幅減倉，保留現金，等待信號明確"
+    elif red_count == 2:
+        return "高度警戒", "red", "🟠 建議減倉至三成，停止新倉，嚴守止損"
+    elif red_count == 1 and green_count >= 3:
+        return "宏觀恐慌（可逢低）", "green", "🟢 宏觀環境健康，短期恐慌為入場機會"
+    elif green_count >= 4:
+        return "牛市環境", "green", "🟢 五層指標全綠，可積極佈局"
+    elif orange_count >= 3:
+        return "謹慎中性", "orange", "🟡 謹慎操作，倉位控制在五成以內"
+    else:
+        return "宏觀恐慌（觀察中）", "orange", "🟡 保持觀望，等待更多指標確認"
+
+
+def _mini_sparkline(values: list, color: str, height: int = 40) -> str:
+    """Generate inline SVG sparkline"""
+    if not values or len(values) < 2:
+        return ""
+    mn, mx = min(values), max(values)
+    rng = mx - mn if mx != mn else 1
+    w, h = 120, height
+    pts = []
+    for i, v in enumerate(values):
+        x = i / (len(values) - 1) * w
+        y = h - (v - mn) / rng * (h - 4) - 2
+        pts.append(f"{x:.1f},{y:.1f}")
+    poly = " ".join(pts)
+    return (
+        f'<svg viewBox="0 0 {w} {h}" width="{w}" height="{h}" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block">'
+        f'<polyline points="{poly}" fill="none" stroke="{color}" '
+        f'stroke-width="2" stroke-linejoin="round"/>'
+        f'</svg>'
+    )
+
+
+def tab_macro_dashboard():
+    th  = get_theme()
+    col = {"green": th["green"], "orange": th["orange"], "red": th["red"]}
+
+    # ── Header ──────────────────────────────────────────────────────
+    st.markdown(
+        f'<div style="margin-bottom:4px">'
+        f'<div style="font-size:22px;font-weight:700;color:{th["text1"]};'
+        f'letter-spacing:-.5px">🌐 宏觀恐慌 vs 結構性熊市</div>'
+        f'<div style="font-size:12px;color:{th["text3"]};margin-top:3px">'
+        f'五層指標儀表板 · 每日自動更新 · 幫你判斷市場是短暫恐慌還是真正熊市</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Methodology toggle ───────────────────────────────────────────
+    mkey = "show_macro_method"
+    if mkey not in st.session_state:
+        st.session_state[mkey] = False
+    if st.button(
+        "▼  框架說明（點擊收起）" if st.session_state[mkey] else "▶  框架說明（點擊了解判斷邏輯）",
+        key="macro_method_btn"
+    ):
+        st.session_state[mkey] = not st.session_state[mkey]
+        st.rerun()
+
+    if st.session_state[mkey]:
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["blue"]}40;'
+            f'border-radius:13px;padding:18px 20px;margin-bottom:12px;'
+            f'border-left:3px solid {th["blue"]}">'
+            f'<div style="font-size:13px;font-weight:700;color:{th["blue"]};margin-bottom:12px">'
+            f'判斷邏輯：茅利路·CUP 框架</div>'
+            f'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;font-size:12px">'
+
+            f'<div style="background:{th["card2"]};border-radius:9px;padding:12px">'
+            f'<div style="color:{th["green"]};font-weight:700;margin-bottom:6px">第一層</div>'
+            f'<div style="color:{th["text1"]};font-weight:600;margin-bottom:4px">HY信用利差</div>'
+            f'<div style="color:{th["text2"]};line-height:1.6">'
+            f'高收益債券信用利差。反映市場對企業違約風險的擔憂程度。<br>'
+            f'<span style="color:{th["green"]}">安全：&lt;350bps</span><br>'
+            f'<span style="color:{th["orange"]}">警戒：350-700bps</span><br>'
+            f'<span style="color:{th["red"]}">危險：&gt;700bps</span><br>'
+            f'2008年峰值：2182bps</div></div>'
+
+            f'<div style="background:{th["card2"]};border-radius:9px;padding:12px">'
+            f'<div style="color:{th["green"]};font-weight:700;margin-bottom:6px">第二層</div>'
+            f'<div style="color:{th["text1"]};font-weight:600;margin-bottom:4px">觸發可逆性</div>'
+            f'<div style="color:{th["text2"]};line-height:1.6">'
+            f'AI分析當前觸發因素。<br>'
+            f'<span style="color:{th["green"]}">可撤回：政策/關稅可談判</span><br>'
+            f'<span style="color:{th["red"]}">不可撤回：銀行崩潰/結構破壞</span><br>'
+            f'2008年係不可撤回，2020/2025係可撤回。</div></div>'
+
+            f'<div style="background:{th["card2"]};border-radius:9px;padding:12px">'
+            f'<div style="color:{th["green"]};font-weight:700;margin-bottom:6px">第三層</div>'
+            f'<div style="color:{th["text1"]};font-weight:600;margin-bottom:4px">衰退概率</div>'
+            f'<div style="color:{th["text2"]};line-height:1.6">'
+            f'Polymarket 預測市場。反映市場集體智慧。<br>'
+            f'<span style="color:{th["green"]}">安全：&lt;30%</span><br>'
+            f'<span style="color:{th["orange"]}">警戒：30-50%</span><br>'
+            f'<span style="color:{th["red"]}">危險：&gt;50%</span></div></div>'
+
+            f'<div style="background:{th["card2"]};border-radius:9px;padding:12px">'
+            f'<div style="color:{th["green"]};font-weight:700;margin-bottom:6px">第四層</div>'
+            f'<div style="color:{th["text1"]};font-weight:600;margin-bottom:4px">銀行信貸健康</div>'
+            f'<div style="color:{th["text2"]};line-height:1.6">'
+            f'四大行（JPM/Citi/WFC/BofA）財報數據。非應計貸款和信貸撥備比率。<br>'
+            f'<span style="color:{th["green"]}">健康：撥備率&lt;3%</span><br>'
+            f'<span style="color:{th["red"]}">危險：撥備率急升</span><br>'
+            f'每季財報後更新。</div></div>'
+
+            f'<div style="background:{th["card2"]};border-radius:9px;padding:12px">'
+            f'<div style="color:{th["green"]};font-weight:700;margin-bottom:6px">第五層</div>'
+            f'<div style="color:{th["text1"]};font-weight:600;margin-bottom:4px">COT機構持倉</div>'
+            f'<div style="color:{th["text2"]};line-height:1.6">'
+            f'CFTC每週公布大型機構S&P500期貨持倉。52週指數化（0-100）。<br>'
+            f'<span style="color:{th["green"]}">看多：指數&gt;70</span><br>'
+            f'<span style="color:{th["orange"]}">中性：40-70</span><br>'
+            f'<span style="color:{th["red"]}">看空：&lt;40</span></div></div>'
+
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(f'<div style="height:6px"></div>', unsafe_allow_html=True)
+
+    # ── Refresh button ───────────────────────────────────────────────
+    rc1, rc2, rc3 = st.columns([2, 1, 4])
+    with rc2:
+        if st.button("🔄 刷新數據", key="macro_refresh", use_container_width=True):
+            # Clear all caches
+            fetch_hy_spread.clear()
+            fetch_recession_prob.clear()
+            fetch_bank_health.clear()
+            fetch_cot_data.clear()
+            fetch_trigger_assessment.clear()
+            st.rerun()
+
+    # ── Fetch all data ───────────────────────────────────────────────
+    with st.spinner("載入五層宏觀數據..."):
+        d_hy     = fetch_hy_spread()
+        d_trig   = fetch_trigger_assessment()
+        d_rec    = fetch_recession_prob()
+        d_bank   = fetch_bank_health()
+        d_cot    = fetch_cot_data()
+
+    statuses = [
+        d_hy.get("status",   "orange"),
+        d_trig.get("status", "orange"),
+        d_rec.get("status",  "orange"),
+        d_bank.get("status", "orange"),
+        d_cot.get("status",  "orange"),
+    ]
+    verdict_label, verdict_status, strategy = _macro_score_to_verdict(statuses)
+    verdict_col = col.get(verdict_status, th["orange"])
+
+    # ── VERDICT BANNER ───────────────────────────────────────────────
+    green_n  = statuses.count("green")
+    orange_n = statuses.count("orange")
+    red_n    = statuses.count("red")
+
+    dot_row = "".join(
+        f'<span style="display:inline-block;width:14px;height:14px;border-radius:50%;'
+        f'background:{col.get(s, th["orange"])};margin:0 3px;'
+        f'{"box-shadow:0 0 6px "+col.get(s,th["orange"]) if s=="green" else ""}"></span>'
+        for s in statuses
+    )
+
+    st.markdown(
+        f'<div style="background:{verdict_col}18;border:2px solid {verdict_col}50;'
+        f'border-radius:14px;padding:20px 24px;margin-bottom:16px">'
+        f'<div style="display:flex;align-items:center;justify-content:space-between;'
+        f'flex-wrap:wrap;gap:12px">'
+        f'<div>'
+        f'<div style="font-size:11px;color:{th["text3"]};letter-spacing:1px;'
+        f'text-transform:uppercase;margin-bottom:6px">綜合判斷</div>'
+        f'<div style="font-size:26px;font-weight:900;color:{verdict_col};'
+        f'letter-spacing:-.5px">{verdict_label}</div>'
+        f'<div style="font-size:13px;color:{th["text2"]};margin-top:6px">{strategy}</div>'
+        f'</div>'
+        f'<div style="text-align:center">'
+        f'<div style="font-size:10px;color:{th["text3"]};margin-bottom:6px">'
+        f'五層指標 🟢×{green_n} 🟡×{orange_n} 🔴×{red_n}</div>'
+        f'<div>{dot_row}</div>'
+        f'</div></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── FIVE LAYER CARDS ─────────────────────────────────────────────
+    # Row 1: layers 1-3
+    c1, c2, c3 = st.columns(3, gap="medium")
+
+    # ── Layer 1: HY Spread ──
+    with c1:
+        s    = d_hy
+        sc   = col.get(s.get("status","orange"), th["orange"])
+        bps  = s.get("bps", 320)
+        chg  = s.get("bps_change", 0)
+        chg_str = f"+{chg} bps（3週）" if chg >= 0 else f"{chg} bps（3週）"
+        spark_c = th["red"] if chg > 0 else th["green"]
+
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+            f'border-radius:13px;padding:16px;height:100%;'
+            f'border-top:3px solid {sc}">'
+            f'<div style="font-size:10px;color:{th["text3"]};font-weight:600;'
+            f'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">'
+            f'第一層 · HY信用利差</div>'
+            f'<div style="font-size:32px;font-weight:900;color:{sc};'
+            f'font-family:Inter;letter-spacing:-1px;margin-bottom:4px">'
+            f'{bps} <span style="font-size:14px;font-weight:400">bps</span></div>'
+            f'<div style="font-size:12px;color:{"#f05555" if chg>0 else "#00c98a"};'
+            f'margin-bottom:10px">{chg_str}</div>'
+            f'<div style="font-size:12px;font-weight:600;color:{sc};'
+            f'margin-bottom:10px">{s.get("label","")}</div>'
+            f'<div style="font-size:10px;color:{th["text3"]};line-height:1.6">'
+            f'警示線：450 bps<br>'
+            f'2020 COVID：1,100 bps<br>'
+            f'2008 危機：2,182 bps</div>'
+            f'<div style="margin-top:10px">'
+            f'{_mini_sparkline(s.get("history",[]), spark_c, 36)}'
+            f'</div>'
+            f'<div style="font-size:10px;color:{th["text3"]};margin-top:6px">'
+            f'代理指標：HYG/LQD 比率</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Layer 2: Trigger Reversibility ──
+    with c2:
+        s  = d_trig
+        sc = col.get(s.get("status","orange"), th["orange"])
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+            f'border-radius:13px;padding:16px;height:100%;'
+            f'border-top:3px solid {sc}">'
+            f'<div style="font-size:10px;color:{th["text3"]};font-weight:600;'
+            f'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">'
+            f'第二層 · 觸發可逆性</div>'
+            f'<div style="font-size:22px;font-weight:800;color:{sc};margin-bottom:8px">'
+            f'{s.get("label","可撤回 🟢")}</div>'
+            f'<div style="font-size:12px;color:{th["text1"]};font-weight:600;'
+            f'margin-bottom:8px">{s.get("main_factor","")}</div>'
+            f'<div style="font-size:12px;color:{th["text2"]};line-height:1.7;'
+            f'margin-bottom:10px">{s.get("reasoning","")}</div>'
+            f'<div style="padding:8px 10px;background:{sc}15;border-radius:8px;'
+            f'border:1px solid {sc}30;font-size:11px;color:{th["text2"]}">'
+            f'AI置信度：{s.get("confidence",65)}%<br>'
+            f'可撤回例：2025關稅（可談判）<br>'
+            f'不可撤回：2008銀行崩潰</div>'
+            f'<div style="font-size:10px;color:{th["text3"]};margin-top:8px">'
+            f'每6小時 AI 自動評估</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Layer 3: Recession Probability ──
+    with c3:
+        s   = d_rec
+        sc  = col.get(s.get("status","orange"), th["orange"])
+        pct = s.get("prob", 25)
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+            f'border-radius:13px;padding:16px;height:100%;'
+            f'border-top:3px solid {sc}">'
+            f'<div style="font-size:10px;color:{th["text3"]};font-weight:600;'
+            f'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">'
+            f'第三層 · 衰退概率</div>'
+            f'<div style="font-size:42px;font-weight:900;color:{sc};'
+            f'font-family:Inter;letter-spacing:-2px;margin-bottom:4px">'
+            f'{pct:.0f}<span style="font-size:18px;font-weight:400">%</span></div>'
+            f'<div style="font-size:12px;font-weight:600;color:{sc};margin-bottom:10px">'
+            f'{s.get("label","")}</div>'
+            f'<div style="height:8px;background:{th["bg2"]};border-radius:4px;'
+            f'overflow:hidden;margin-bottom:10px">'
+            f'<div style="width:{min(pct,100)}%;height:100%;background:{sc};'
+            f'border-radius:4px"></div></div>'
+            f'<div style="font-size:10px;color:{th["text3"]};line-height:1.6">'
+            f'<span style="color:{th["green"]}">安全：&lt;30%</span> · '
+            f'<span style="color:{th["orange"]}">警戒：30-50%</span> · '
+            f'<span style="color:{th["red"]}">危險：&gt;50%</span></div>'
+            f'<div style="font-size:10px;color:{th["text3"]};margin-top:8px">'
+            f'來源：{s.get("source","Polymarket")}<br>'
+            f'{s.get("market_title","")[:50]}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(f'<div style="height:10px"></div>', unsafe_allow_html=True)
+
+    # Row 2: layers 4-5 + historical reference
+    c4, c5, c6 = st.columns(3, gap="medium")
+
+    # ── Layer 4: Bank Health ──
+    with c4:
+        s   = d_bank
+        sc  = col.get(s.get("status","orange"), th["orange"])
+        avg = s.get("avg_prov")
+
+        banks_html = ""
+        for sym, info in s.get("banks", {}).items():
+            pv = info.get("prov_pct")
+            pv_str = f"{pv:.1f}%" if pv is not None else "N/A"
+            pv_col = th["green"] if pv and pv < 3 else th["orange"] if pv and pv < 6 else th["red"]
+            banks_html += (
+                f'<div style="display:flex;justify-content:space-between;'
+                f'padding:5px 0;border-bottom:1px solid {th["border2"]}">'
+                f'<span style="font-size:12px;color:{th["text2"]}">'
+                f'{sym} {info.get("name","")}</span>'
+                f'<span style="font-size:12px;font-weight:700;color:{pv_col}">'
+                f'{pv_str}</span>'
+                f'</div>'
+            )
+
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+            f'border-radius:13px;padding:16px;height:100%;'
+            f'border-top:3px solid {sc}">'
+            f'<div style="font-size:10px;color:{th["text3"]};font-weight:600;'
+            f'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">'
+            f'第四層 · 銀行信貸健康</div>'
+            f'<div style="font-size:22px;font-weight:800;color:{sc};margin-bottom:8px">'
+            f'{s.get("label","")}</div>'
+            f'{banks_html}'
+            f'<div style="font-size:10px;color:{th["text3"]};margin-top:10px;line-height:1.6">'
+            f'撥備率 = 信貸損失撥備/總收入<br>'
+            f'{s.get("note","")}<br>'
+            f'每季財報後自動更新</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Layer 5: COT Data ──
+    with c5:
+        s   = d_cot
+        sc  = col.get(s.get("status","orange"), th["orange"])
+        idx = s.get("cot_index", 50)
+
+        # Arc-style gauge using bar
+        arc_pct = idx
+
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+            f'border-radius:13px;padding:16px;height:100%;'
+            f'border-top:3px solid {sc}">'
+            f'<div style="font-size:10px;color:{th["text3"]};font-weight:600;'
+            f'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">'
+            f'第五層 · COT機構持倉</div>'
+            f'<div style="font-size:42px;font-weight:900;color:{sc};'
+            f'font-family:Inter;letter-spacing:-2px;margin-bottom:4px">'
+            f'{idx}<span style="font-size:14px;font-weight:400">/100</span></div>'
+            f'<div style="font-size:12px;font-weight:600;color:{sc};margin-bottom:10px">'
+            f'{s.get("label","")}</div>'
+            f'<div style="height:8px;background:{th["bg2"]};border-radius:4px;'
+            f'overflow:hidden;margin-bottom:8px">'
+            f'<div style="width:{arc_pct}%;height:100%;background:{sc};'
+            f'border-radius:4px"></div></div>'
+            f'<div style="display:flex;justify-content:space-between;'
+            f'font-size:10px;color:{th["text3"]};margin-bottom:10px">'
+            f'<span>看空 0</span><span>中性 50</span><span>看多 100</span></div>'
+            f'<div style="font-size:11px;color:{th["text2"]};line-height:1.6">'
+            f'淨多倉：{s.get("net",0):,}（'
+            f'{"+" if s.get("net_change",0)>=0 else ""}{s.get("net_change",0):,} 週變化）<br>'
+            f'52週範圍：{s.get("net_min_52",0):,} ~ {s.get("net_max_52",0):,}</div>'
+            f'<div style="font-size:10px;color:{th["text3"]};margin-top:8px">'
+            f'CFTC每週五更新 · 數據至 {s.get("date","N/A")}<br>'
+            f'{s.get("note","")}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Historical Reference ──
+    with c6:
+        st.markdown(
+            f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
+            f'border-radius:13px;padding:16px;height:100%;'
+            f'border-top:3px solid {th["blue"]}">'
+            f'<div style="font-size:10px;color:{th["text3"]};font-weight:600;'
+            f'letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">'
+            f'歷史熊市參考</div>'
+
+            f'<div style="margin-bottom:14px">'
+            f'<div style="font-size:12px;color:{th["text3"]};margin-bottom:6px">'
+            f'歷史跌市類型與復原時間</div>'
+            + "".join(
+                f'<div style="margin-bottom:8px">'
+                f'<div style="display:flex;justify-content:space-between;'
+                f'font-size:12px;margin-bottom:3px">'
+                f'<span style="color:{th["text1"]};font-weight:600">{name}</span>'
+                f'<span style="color:{c_};font-weight:700">{pct}%</span></div>'
+                f'<div style="height:5px;background:{th["bg2"]};border-radius:3px;overflow:hidden">'
+                f'<div style="width:{pct}%;height:100%;background:{c_};border-radius:3px"></div></div>'
+                f'<div style="font-size:10px;color:{th["text3"]};margin-top:2px">{note}</div>'
+                f'</div>'
+                for name, pct, c_, note in [
+                    ("事件驅動型", 29, th["green"],  "平均15個月復原"),
+                    ("週期性",     31, th["orange"], "15-42個月復原"),
+                    ("結構性",     57, th["red"],    "42個月+復原，最危險"),
+                ]
+            )
+            + f'</div>'
+
+            f'<div style="padding:10px;background:{th["card2"]};border-radius:9px;'
+            f'font-size:11px;color:{th["text2"]};line-height:1.7">'
+            f'<span style="color:{th["green"]};font-weight:600">宏觀恐慌</span>：'
+            f'短暫事件觸發，基本面完好，通常6-15個月復原，逢低是機會<br>'
+            f'<span style="color:{th["red"]};font-weight:600">結構性熊市</span>：'
+            f'信貸/銀行體系破裂，需3-4年復原，要保本離場</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Footer ──────────────────────────────────────────────────────
+    now_str = datetime.now(pytz.timezone("Europe/London")).strftime("%Y-%m-%d %H:%M")
+    st.markdown(
+        f'<div style="text-align:center;padding:12px;font-size:11px;'
+        f'color:{th["text3"]};border-top:1px solid {th["border2"]};margin-top:10px">'
+        f'數據更新：{now_str} London · '
+        f'HY利差每日 · AI評估每6小時 · Polymarket每日 · 銀行財報每季 · COT每週五<br>'
+        f'本頁面僅作教育參考，不構成投資建議。框架來源：茅利路·CUP</div>',
+        unsafe_allow_html=True,
     )
 
 
