@@ -3237,81 +3237,165 @@ def fetch_recession_prob() -> dict:
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_bank_health() -> dict:
     """
-    Layer 4: Bank health via FMP API
-    Fetch Non-Performing Loans ratio and key metrics from JPM, C, WFC, BAC
+    Layer 4: Bank health — FMP API primary, yfinance stock performance as fallback.
+    Tracks Non-Performing Loans and Credit Loss Provisions for JPM/C/WFC/BAC.
     """
+    banks = {"JPM": "摩根大通", "C": "花旗", "WFC": "富國銀行", "BAC": "美國銀行"}
+    results = {}
+
+    # ── Primary: FMP API ─────────────────────────────────────────
     try:
         fmp_key = st.secrets["fmp"]["api_key"]
-        banks   = {"JPM": "摩根大通", "C": "花旗", "WFC": "富國銀行", "BAC": "美國銀行"}
-        results = {}
+        fmp_ok  = True
+    except Exception:
+        fmp_key = None
+        fmp_ok  = False
 
+    if fmp_ok:
         for sym, name in banks.items():
             try:
-                # Key metrics
-                url = f"https://financialmodelingprep.com/api/v3/key-metrics/{sym}?period=annual&limit=2&apikey={fmp_key}"
-                r   = requests.get(url, timeout=10)
-                r.raise_for_status()
-                data = r.json()
-                if not data:
-                    continue
-                latest = data[0]
-                prev   = data[1] if len(data) > 1 else data[0]
+                # ── Income statement (provision data) ──
+                url_inc = (
+                    f"https://financialmodelingprep.com/api/v3/income-statement/{sym}"
+                    f"?period=annual&limit=2&apikey={fmp_key}"
+                )
+                r_inc = requests.get(url_inc, timeout=12)
+                r_inc.raise_for_status()
+                inc = r_inc.json()
 
-                # Use NPL proxy: loan loss provisions / revenue
-                # FMP provides: nonPerformingLoansToTotalGrossLoans (if available)
-                npl_ratio   = latest.get("nonPerformingLoansToTotalGrossLoans", None)
-                if npl_ratio is None:
-                    # Proxy: use debtToEquity as financial health indicator
-                    npl_ratio = latest.get("debtToEquity", 0)
-                    is_proxy  = True
-                else:
-                    is_proxy  = False
-
-                # Get income statement for provision data
-                url2  = f"https://financialmodelingprep.com/api/v3/income-statement/{sym}?period=annual&limit=2&apikey={fmp_key}"
-                r2    = requests.get(url2, timeout=10)
-                inc   = r2.json()
                 provision_ratio = None
-                if inc and len(inc) >= 1:
-                    rev      = inc[0].get("revenue", 1)
-                    prov     = inc[0].get("provisionForCreditLosses",
-                               inc[0].get("creditLossProvision", 0)) or 0
-                    if rev and rev > 0:
-                        provision_ratio = round(prov / rev * 100, 2)
+                period_str      = "N/A"
+                prov_raw        = None
+                rev_raw         = None
+
+                if inc and isinstance(inc, list) and len(inc) >= 1:
+                    row = inc[0]
+                    period_str = row.get("date", "N/A")
+                    rev_raw  = row.get("revenue") or row.get("totalRevenue") or \
+                               row.get("netRevenue") or row.get("interestIncome") or 0
+
+                    # Try every known FMP field name for credit loss provision
+                    prov_raw = (
+                        row.get("provisionForCreditLosses") or
+                        row.get("creditLossProvision") or
+                        row.get("provisionForLoanLosses") or
+                        row.get("provisionForLoanAndLeaseLosses") or
+                        row.get("loanLossProvision") or
+                        row.get("provisionForBadDebts") or
+                        row.get("allowanceForCreditLosses") or
+                        None
+                    )
+
+                    if prov_raw and rev_raw and float(rev_raw) > 0:
+                        provision_ratio = round(abs(float(prov_raw)) / abs(float(rev_raw)) * 100, 2)
+
+                # ── Key metrics (NPL ratio if available) ──
+                url_km = (
+                    f"https://financialmodelingprep.com/api/v3/key-metrics/{sym}"
+                    f"?period=annual&limit=1&apikey={fmp_key}"
+                )
+                r_km = requests.get(url_km, timeout=12)
+                r_km.raise_for_status()
+                km = r_km.json()
+                npl_ratio = None
+                if km and isinstance(km, list):
+                    row_km   = km[0]
+                    npl_ratio = (
+                        row_km.get("nonPerformingLoansToTotalGrossLoans") or
+                        row_km.get("nplRatio") or
+                        row_km.get("nonPerformingLoansRatio") or
+                        None
+                    )
+                    if period_str == "N/A":
+                        period_str = row_km.get("date", "N/A")
 
                 results[sym] = {
-                    "name":     name,
-                    "npl":      round(float(npl_ratio or 0), 3),
-                    "is_proxy": is_proxy,
-                    "prov_pct": provision_ratio,
-                    "period":   latest.get("date", "N/A"),
+                    "name":      name,
+                    "prov_pct":  provision_ratio,
+                    "prov_raw":  int(prov_raw) if prov_raw else None,
+                    "rev_raw":   int(rev_raw)  if rev_raw  else None,
+                    "npl":       round(float(npl_ratio), 4) if npl_ratio else None,
+                    "period":    period_str,
+                    "source":    "FMP",
                 }
-            except Exception:
-                results[sym] = {"name": name, "npl": None, "prov_pct": None, "period": "N/A"}
 
-        # Overall health assessment
-        prov_vals = [v["prov_pct"] for v in results.values()
-                     if v.get("prov_pct") is not None]
-        avg_prov  = sum(prov_vals) / len(prov_vals) if prov_vals else None
+            except Exception as ex:
+                results[sym] = {
+                    "name": name, "prov_pct": None, "npl": None,
+                    "period": "N/A", "source": "FMP", "error": str(ex)
+                }
 
-        if avg_prov is None:        status = "orange"; label = "數據待更新"
-        elif avg_prov < 3:          status = "green";  label = "信貸健康穩定 ✅"
-        elif avg_prov < 6:          status = "orange"; label = "信貸壓力上升 ⚠️"
-        else:                       status = "red";    label = "信貸惡化警告 🚨"
+    # ── Fallback: yfinance stock performance vs XLF ───────────────
+    # If FMP gave us no data, use bank stock 3-month performance
+    # vs XLF (financial sector ETF) as a proxy for credit health
+    prov_vals = [v.get("prov_pct") for v in results.values() if v.get("prov_pct") is not None]
+    if not prov_vals:
+        try:
+            syms_yf = list(banks.keys()) + ["XLF"]
+            df_yf   = yf.download(syms_yf, period="6mo", interval="1d",
+                                   progress=False, auto_adjust=True)
+            if isinstance(df_yf.columns, pd.MultiIndex):
+                closes_yf = df_yf["Close"].dropna()
+            else:
+                closes_yf = df_yf[["Close"]].dropna()
 
-        return {
-            "banks":    results,
-            "avg_prov": round(avg_prov, 2) if avg_prov else None,
-            "status":   status,
-            "label":    label,
-            "note":     "撥備率 = 信貸損失撥備 / 總收入，反映銀行對壞賬的預期",
-        }
-    except Exception as e:
-        return {
-            "banks": {}, "avg_prov": None,
-            "status": "orange", "label": "FMP API 連接失敗",
-            "error": str(e),
-        }
+            xlf_ret = None
+            if "XLF" in closes_yf.columns:
+                xlf_c   = closes_yf["XLF"].dropna()
+                xlf_ret = (float(xlf_c.iloc[-1]) / float(xlf_c.iloc[max(0,len(xlf_c)-63)]) - 1) * 100
+
+            for sym, name in banks.items():
+                if sym in closes_yf.columns:
+                    c    = closes_yf[sym].dropna()
+                    r3m  = (float(c.iloc[-1]) / float(c.iloc[max(0,len(c)-63)]) - 1) * 100
+                    r1m  = (float(c.iloc[-1]) / float(c.iloc[max(0,len(c)-22)]) - 1) * 100
+                    # Relative performance vs XLF: underperformance = potential stress
+                    rel  = round(r3m - xlf_ret, 1) if xlf_ret is not None else 0
+                    results[sym] = {
+                        "name":     name,
+                        "prov_pct": None,
+                        "ret_3m":   round(r3m, 1),
+                        "ret_1m":   round(r1m, 1),
+                        "rel_xlf":  rel,
+                        "period":   "近3個月股價",
+                        "source":   "yfinance（備用）",
+                    }
+        except Exception as ex2:
+            for sym, name in banks.items():
+                if sym not in results:
+                    results[sym] = {"name": name, "prov_pct": None,
+                                    "period": "N/A", "source": "unavailable"}
+
+    # ── Overall assessment ────────────────────────────────────────
+    prov_vals = [v.get("prov_pct") for v in results.values() if v.get("prov_pct") is not None]
+
+    if prov_vals:
+        avg_prov = sum(prov_vals) / len(prov_vals)
+        if   avg_prov < 3:   status = "green";  label = f"信貸健康穩定 ✅（撥備率均值 {avg_prov:.1f}%）"
+        elif avg_prov < 6:   status = "orange"; label = f"信貸壓力上升 ⚠️（撥備率均值 {avg_prov:.1f}%）"
+        else:                status = "red";    label = f"信貸惡化警告 🚨（撥備率均值 {avg_prov:.1f}%）"
+    else:
+        # Use stock relative performance as proxy
+        rel_vals = [v.get("rel_xlf") for v in results.values() if v.get("rel_xlf") is not None]
+        if rel_vals:
+            avg_rel = sum(rel_vals) / len(rel_vals)
+            if   avg_rel > -5:  status = "green";  label = "銀行股表現正常（相對XLF）✅"
+            elif avg_rel > -15: status = "orange"; label = "銀行股輕微跑輸大市 ⚠️"
+            else:               status = "red";    label = "銀行股大幅跑輸，信貸壓力訊號 🚨"
+            avg_prov = None
+        else:
+            status   = "orange"
+            label    = "數據待更新（季報後自動刷新）"
+            avg_prov = None
+
+    return {
+        "banks":    results,
+        "avg_prov": round(avg_prov, 2) if prov_vals else None,
+        "status":   status,
+        "label":    label,
+        "note":     "撥備率 = 信貸損失撥備 / 總收入。反映銀行對壞賬的預期。數據來源：FMP API（優先）/ yfinance股價（備用）",
+        "source":   "FMP" if prov_vals else "yfinance",
+    }
 
 
 @st.cache_data(ttl=7200, show_spinner=False)
@@ -3395,62 +3479,136 @@ def fetch_cot_data() -> dict:
 @st.cache_data(ttl=21600, show_spinner=False)
 def fetch_trigger_assessment() -> dict:
     """
-    Layer 2: AI assessment of whether current market trigger is reversible
-    Uses Groq to analyze current macro context
+    Layer 2: AI assessment of whether current market trigger is reversible.
+    Step 1: Use Groq with web_search tool to get real-time market news.
+    Step 2: Ask Groq to assess reversibility based on actual current events.
     """
     try:
         groq_key = st.secrets["groq"]["api_key"]
-        prompt = """
-你是一位宏觀經濟分析師。根據2026年4月的市場情況，判斷以下問題：
 
-當前主要市場下跌觸發因素（2025-2026）：
-1. 美國關稅政策不確定性
-2. 聯儲局維持高利率
-3. 中東地緣政治
-4. AI泡沫擔憂
-
-請判斷這些因素屬於「可撤回」還是「不可撤回」類型？
-
-回答格式（嚴格遵守JSON）：
-{
-  "type": "reversible" 或 "irreversible",
-  "confidence": 0-100,
-  "main_factor": "主要觸發因素（一句話）",
-  "reasoning": "判斷理由（2句話）",
-  "label": "可撤回 🟢" 或 "不可撤回 🔴" 或 "混合型 🟡"
-}
-
-只回答JSON，不要其他內容。
-"""
-        r = requests.post(
+        # ── Step 1: Fetch real-time news via Groq web_search tool ──
+        today = datetime.now(pytz.timezone("Europe/London")).strftime("%Y-%m-%d")
+        search_r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {groq_key}",
                      "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile", "max_tokens": 300,
-                  "temperature": 0.2,
-                  "messages": [
-                      {"role": "system", "content": "你是一位精確的宏觀分析師，只輸出JSON。"},
-                      {"role": "user",   "content": prompt},
-                  ]},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "max_tokens": 500,
+                "temperature": 0.1,
+                "tools": [{"type": "web_search_preview"}],
+                "tool_choice": "auto",
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        f"Today is {today}. Search for the top 3 current macro risks "
+                        f"affecting US stock markets right now. "
+                        f"What are the main geopolitical, economic or policy events "
+                        f"causing market volatility this week? "
+                        f"List them briefly in 3 bullet points."
+                    )
+                }],
+            },
+            timeout=30,
+        )
+        search_r.raise_for_status()
+        search_data    = search_r.json()
+        news_content   = ""
+        for choice in search_data.get("choices", []):
+            msg = choice.get("message", {})
+            if msg.get("content"):
+                news_content = msg["content"]
+                break
+            # tool_calls path
+            for tc in msg.get("tool_calls", []):
+                if tc.get("type") == "web_search_preview":
+                    news_content += tc.get("function", {}).get("output", "")
+
+        if not news_content:
+            news_content = f"Current date: {today}. Major macro risks include geopolitical tensions and monetary policy uncertainty."
+
+        # ── Step 2: Assess reversibility based on real news ──
+        assess_prompt = f"""
+你是一位宏觀經濟分析師。根據以下實時新聞，判斷當前市場下跌的主要觸發因素是否「可撤回」。
+
+今日日期：{today}
+當前市場狀況（來自實時搜索）：
+{news_content}
+
+判斷標準：
+- 「可撤回」：觸發因素可通過談判、政策調整、外交斡旋解決（如：貿易戰、關稅、利率政策）
+- 「不可撤回」：觸發因素涉及結構性破壞，無法短期逆轉（如：銀行體系崩潰、主權債務危機、大規模戰爭擴散）
+- 「混合型」：部分可撤回，部分結構性
+
+戰爭注意：地區性軍事衝突（如美伊、以巴）通常屬於「混合型」，可通過停火談判部分撤回，但地緣政治風險溢價難以完全消除。
+
+嚴格只輸出JSON，不要任何其他文字：
+{{
+  "type": "reversible" 或 "irreversible" 或 "mixed",
+  "confidence": 0到100的整數,
+  "main_factor": "主要觸發因素（一句話，反映當前真實情況）",
+  "reasoning": "判斷理由（2句話，基於上方新聞）",
+  "label": "可撤回 🟢" 或 "不可撤回 🔴" 或 "混合型 🟡"
+}}
+"""
+        assess_r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {groq_key}",
+                     "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "max_tokens": 350,
+                "temperature": 0.1,
+                "messages": [
+                    {"role": "system", "content": "你是精確的宏觀分析師。嚴格只輸出JSON，不含任何其他文字或markdown。"},
+                    {"role": "user",   "content": assess_prompt},
+                ],
+            },
             timeout=20,
         )
-        r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"].strip()
-        # Clean JSON
+        assess_r.raise_for_status()
+        content = assess_r.json()["choices"][0]["message"]["content"].strip()
+
+        # Clean JSON — handle markdown code blocks
         if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
+            parts = content.split("```")
+            for part in parts:
+                part = part.strip().lstrip("json").strip()
+                if part.startswith("{"):
+                    content = part
+                    break
+        # Find first { to last }
+        start = content.find("{")
+        end   = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            content = content[start:end]
+
         result = json.loads(content)
-        result["status"] = "green" if result.get("type") == "reversible" else \
-                           "red"   if result.get("type") == "irreversible" else "orange"
+
+        # Map type to status color
+        type_map = {
+            "reversible":   ("green",  "可撤回 🟢"),
+            "irreversible": ("red",    "不可撤回 🔴"),
+            "mixed":        ("orange", "混合型 🟡"),
+        }
+        status, default_label = type_map.get(result.get("type","mixed"), ("orange","混合型 🟡"))
+        result["status"] = status
+        if not result.get("label"):
+            result["label"] = default_label
+        result["news_used"] = news_content[:200] + "..." if len(news_content) > 200 else news_content
+
         return result
+
     except Exception as e:
+        # Fallback: use today's date in error message so it's not always "關稅"
+        today_fb = datetime.now(pytz.timezone("Europe/London")).strftime("%Y-%m-%d")
         return {
-            "type":        "reversible",
-            "confidence":  65,
-            "main_factor": "關稅政策不確定性（可談判）",
-            "reasoning":   "當前觸發因素主要為政策性，可透過談判或政策調整撤回。",
-            "label":       "可撤回 🟢",
-            "status":      "green",
+            "type":        "mixed",
+            "confidence":  50,
+            "main_factor": f"實時新聞獲取失敗，請手動評估（{today_fb}）",
+            "reasoning":   "AI搜索暫時不可用。請根據當前市場新聞自行判斷觸發因素是否可撤回。",
+            "label":       "混合型 🟡",
+            "status":      "orange",
             "error":       str(e),
         }
 
@@ -3761,21 +3919,44 @@ def tab_macro_dashboard():
         s   = d_bank
         sc  = col.get(s.get("status","orange"), th["orange"])
         avg = s.get("avg_prov")
+        data_source = s.get("source", "FMP")
 
         banks_html = ""
         for sym, info in s.get("banks", {}).items():
-            pv = info.get("prov_pct")
-            pv_str = f"{pv:.1f}%" if pv is not None else "N/A"
-            pv_col = th["green"] if pv and pv < 3 else th["orange"] if pv and pv < 6 else th["red"]
+            pv      = info.get("prov_pct")
+            ret_3m  = info.get("ret_3m")
+            rel_xlf = info.get("rel_xlf")
+
+            if pv is not None:
+                # FMP provision data available
+                pv_col = th["green"] if pv < 3 else th["orange"] if pv < 6 else th["red"]
+                val_str = f"撥備率 {pv:.1f}%"
+            elif ret_3m is not None:
+                # yfinance fallback
+                rel_str = f"vs XLF {rel_xlf:+.1f}%" if rel_xlf is not None else ""
+                pv_col  = th["green"] if (rel_xlf or 0) > -5 else th["orange"] if (rel_xlf or 0) > -15 else th["red"]
+                val_str = f"3M {ret_3m:+.1f}%  {rel_str}"
+            else:
+                pv_col  = th["text3"]
+                val_str = "獲取中..."
+
             banks_html += (
                 f'<div style="display:flex;justify-content:space-between;'
-                f'padding:5px 0;border-bottom:1px solid {th["border2"]}">'
-                f'<span style="font-size:12px;color:{th["text2"]}">'
+                f'align-items:center;padding:6px 0;border-bottom:1px solid {th["border2"]}">'
+                f'<span style="font-size:12px;color:{th["text2"]};font-weight:500">'
                 f'{sym} {info.get("name","")}</span>'
-                f'<span style="font-size:12px;font-weight:700;color:{pv_col}">'
-                f'{pv_str}</span>'
+                f'<span style="font-size:11px;font-weight:700;color:{pv_col}">'
+                f'{val_str}</span>'
                 f'</div>'
             )
+
+        period_str = ""
+        for info in s.get("banks", {}).values():
+            if info.get("period") and info["period"] != "N/A":
+                period_str = info["period"]
+                break
+
+        source_note = "FMP API 財報數據" if data_source == "FMP" else "yfinance 股價代理（FMP備用）"
 
         st.markdown(
             f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
@@ -3784,13 +3965,13 @@ def tab_macro_dashboard():
             f'<div style="font-size:10px;color:{th["text3"]};font-weight:600;'
             f'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">'
             f'第四層 · 銀行信貸健康</div>'
-            f'<div style="font-size:22px;font-weight:800;color:{sc};margin-bottom:8px">'
+            f'<div style="font-size:20px;font-weight:800;color:{sc};margin-bottom:10px;line-height:1.3">'
             f'{s.get("label","")}</div>'
-            f'{banks_html}'
-            f'<div style="font-size:10px;color:{th["text3"]};margin-top:10px;line-height:1.6">'
-            f'撥備率 = 信貸損失撥備/總收入<br>'
-            f'{s.get("note","")}<br>'
-            f'每季財報後自動更新</div>'
+            f'{banks_html if banks_html else "<div style=\"color:" + th["text3"] + ";font-size:12px;padding:10px 0\">數據載入中...</div>"}'
+            f'<div style="font-size:10px;color:{th["text3"]};margin-top:10px;line-height:1.7">'
+            f'來源：{source_note}<br>'
+            f'{("數據期間：" + period_str) if period_str else ""}<br>'
+            f'{s.get("note","")}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
