@@ -18,6 +18,8 @@ import gspread
 from google.oauth2.service_account import Credentials
 import json
 import time
+import requests
+import re as _re_global
 
 # ═══════════════════════════════════════════════════════════════════
 #   PAGE CONFIG
@@ -2923,9 +2925,8 @@ def tab_action_signals():
 
 {lang_inst}
 """
-                    import requests as _req
                     try:
-                        r = _req.post(
+                        r = requests.post(
                             "https://api.groq.com/openai/v1/chat/completions",
                             headers={"Authorization": f"Bearer {st.secrets['groq']['api_key']}",
                                      "Content-Type": "application/json"},
@@ -3440,23 +3441,54 @@ def fetch_cot_data() -> dict:
         rows = data["data"]
 
         df_cot = pd.DataFrame(rows, columns=cols)
-        df_cot["Date"] = pd.to_datetime(df_cot["Date"])
-        df_cot = df_cot.sort_values("Date")
+        # Date column might be named differently
+        date_col = next((c for c in cols if c.lower() == "date"), cols[0])
+        df_cot[date_col] = pd.to_datetime(df_cot[date_col])
+        df_cot = df_cot.sort_values(date_col)
 
-        # Large Speculators Net = Long - Short
-        # Column names vary; find long/short columns
-        long_col  = next((c for c in cols if "Lrg Spec Long"  in c or "Large Spec Long"  in c), None)
-        short_col = next((c for c in cols if "Lrg Spec Short" in c or "Large Spec Short" in c), None)
+        # ── Find Long/Short columns ───────────────────────────────
+        # Nasdaq Data Link CFTC column names (varies by dataset format):
+        # Long format (_L_ALL): "Lrg. Spec. Long", "Lrg. Spec. Short"
+        # or "Large Speculator Long", "Large Speculator Short"
+        # or "NonComm. Positions Long (All)", "NonComm. Positions Short (All)"
+        long_patterns  = [
+            "Lrg. Spec. Long", "Lrg Spec Long", "Large Spec Long",
+            "Large Speculator Long", "NonComm. Positions Long",
+            "Noncommercial Long", "Non-Commercial Long",
+            "Asset Mgr. Longs", "Leveraged Funds Longs",
+        ]
+        short_patterns = [
+            "Lrg. Spec. Short", "Lrg Spec Short", "Large Spec Short",
+            "Large Speculator Short", "NonComm. Positions Short",
+            "Noncommercial Short", "Non-Commercial Short",
+            "Asset Mgr. Shorts", "Leveraged Funds Shorts",
+        ]
+
+        long_col  = next((c for c in cols for p in long_patterns
+                          if p.lower() in c.lower()), None)
+        short_col = next((c for c in cols for p in short_patterns
+                          if p.lower() in c.lower()), None)
 
         if long_col and short_col:
-            df_cot["net"] = df_cot[long_col] - df_cot[short_col]
+            df_cot["net"] = pd.to_numeric(df_cot[long_col],  errors="coerce") - \
+                            pd.to_numeric(df_cot[short_col], errors="coerce")
         else:
-            # Try generic column detection
-            num_cols = [c for c in cols if c != "Date" and df_cot[c].dtype in [float, int]]
-            if len(num_cols) >= 2:
-                df_cot["net"] = df_cot[num_cols[0]] - df_cot[num_cols[1]]
+            # Last resort: use 2nd and 3rd numeric columns (typically long, short)
+            num_cols = [c for c in cols if c != date_col]
+            numeric_cols = []
+            for c in num_cols:
+                try:
+                    if pd.to_numeric(df_cot[c], errors="coerce").notna().sum() > 10:
+                        numeric_cols.append(c)
+                except Exception:
+                    pass
+            if len(numeric_cols) >= 2:
+                df_cot["net"] = pd.to_numeric(df_cot[numeric_cols[0]], errors="coerce") - \
+                                pd.to_numeric(df_cot[numeric_cols[1]], errors="coerce")
             else:
-                raise ValueError("Cannot find Long/Short columns in COT data")
+                raise ValueError(
+                    f"Cannot find Long/Short columns. Available: {cols[:10]}"
+                )
 
         net_series = df_cot["net"].dropna()
         cur_net    = float(net_series.iloc[-1])
@@ -3473,7 +3505,7 @@ def fetch_cot_data() -> dict:
         elif cot_index >= 40: status = "orange"; label = f"機構中性 {cot_index}/100"
         else:                 status = "red";    label = f"機構看空 {cot_index}/100"
 
-        date_latest = df_cot["Date"].iloc[-1].strftime("%Y-%m-%d")
+        date_latest = df_cot[date_col].iloc[-1].strftime("%Y-%m-%d")
         net_change  = int(cur_net - prev_net)
 
         return {
@@ -3490,10 +3522,17 @@ def fetch_cot_data() -> dict:
             "dataset":      used_dataset,
         }
     except Exception as e:
+        err_msg = str(e)[:120]
         return {
             "cot_index": 50, "net": 0, "net_change": 0,
-            "status": "orange", "label": "COT 數據獲取失敗",
-            "error": str(e),
+            "net_min_52": 0, "net_max_52": 0,
+            "status": "orange",
+            "label": f"COT 數據獲取失敗",
+            "date": "N/A",
+            "history": [],
+            "note": "大型機構S&P500期貨淨多倉，52週指數化",
+            "dataset": "unknown",
+            "error": err_msg,
         }
 
 
@@ -3530,15 +3569,14 @@ def fetch_trigger_assessment() -> dict:
         ("WSJ Markets",
          "https://feeds.a.dj.com/rss/RSSMarketsMain.xml", "xml"),
     ]
-    import re as _re
     for src_name, feed_url, fmt in news_urls:
         try:
             rr = requests.get(feed_url, timeout=8,
                               headers={"User-Agent": "MarketIQ/1.0"})
             if rr.status_code == 200 and len(rr.text) > 200:
-                titles = _re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", rr.text)
+                titles = _re_global.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", rr.text)
                 if not titles:
-                    titles = _re.findall(r"<title>(.*?)</title>", rr.text)
+                    titles = _re_global.findall(r"<title>(.*?)</title>", rr.text)
                 titles = [t.strip() for t in titles[1:6] if t.strip()]
                 if titles:
                     news_headlines = "\n".join(f"• {t}" for t in titles)
@@ -3629,9 +3667,8 @@ def fetch_trigger_assessment() -> dict:
         return result
 
     except json.JSONDecodeError:
-        import re as re2
-        t_m = re2.search(r'"type"\s*:\s*"(\w+)"', raw if "raw" in dir() else "")
-        f_m = re2.search(r'"main_factor"\s*:\s*"([^"]+)"', raw if "raw" in dir() else "")
+        t_m = _re_global.search(r'"type"\s*:\s*"(\w+)"', raw if "raw" in dir() else "")
+        f_m = _re_global.search(r'"main_factor"\s*:\s*"([^"]+)"', raw if "raw" in dir() else "")
         t   = t_m.group(1) if t_m else "mixed"
         tp  = {"reversible":("green","可撤回 🟢"),"irreversible":("red","不可撤回 🔴"),"mixed":("orange","混合型 🟡")}
         st_, lbl_ = tp.get(t, ("orange","混合型 🟡"))
@@ -3909,7 +3946,10 @@ def tab_macro_dashboard():
             f'可撤回例：2025關稅（可談判）<br>'
             f'不可撤回：2008銀行崩潰</div>'
             f'<div style="font-size:10px;color:{th["text3"]};margin-top:8px">'
-            f'每6小時 AI 自動評估</div>'
+            f'每6小時 AI 自動評估 · {s.get("date_used","")}<br>'
+            f'新聞來源：{s.get("news_source","Groq knowledge")}'
+            + (f'<br><span style="color:{th["red"]};word-break:break-all">{s["error"][:80]}</span>' if s.get("error") else "")
+            + f'</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -4047,7 +4087,10 @@ def tab_macro_dashboard():
             f'52週範圍：{s.get("net_min_52",0):,} ~ {s.get("net_max_52",0):,}</div>'
             f'<div style="font-size:10px;color:{th["text3"]};margin-top:8px">'
             f'CFTC每週五更新 · 數據至 {s.get("date","N/A")}<br>'
-            f'{s.get("note","")}</div>'
+            f'Dataset: {s.get("dataset","N/A")}<br>'
+            f'{s.get("note","")}'
+            + (f'<br><span style="color:{th["red"]}">{s["error"]}</span>' if s.get("error") else "")
+            + f'</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -4625,7 +4668,6 @@ def is_pro() -> bool:
 
 
 def groq_call(prompt: str, sys_msg: str = "") -> str:
-    import requests as _req
     try:
         key = st.secrets["groq"]["api_key"]
     except Exception:
@@ -4637,7 +4679,7 @@ def groq_call(prompt: str, sys_msg: str = "") -> str:
     system = sys_msg or f"你是一位專業股票市場分析師。{lang_inst}"
     model = "llama-3.3-70b-versatile" if is_pro() else "llama-3.1-8b-instant"
     try:
-        r = _req.post(
+        r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={"model": model, "max_tokens": 1024, "temperature": 0.3,
@@ -4652,10 +4694,9 @@ def groq_call(prompt: str, sys_msg: str = "") -> str:
 
 
 def send_telegram_msg(chat_id: str, text: str) -> bool:
-    import requests as _req
     try:
         tok = st.secrets["telegram"]["bot_token"]
-        r = _req.post(f"https://api.telegram.org/bot{tok}/sendMessage",
+        r = requests.post(f"https://api.telegram.org/bot{tok}/sendMessage",
                       json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
                       timeout=10)
         return r.status_code == 200
