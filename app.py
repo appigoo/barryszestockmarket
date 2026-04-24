@@ -3437,42 +3437,85 @@ def fetch_cot_data() -> dict:
                 continue
 
         if data is None:
-            # ── Ultimate fallback: CFTC direct download ──────────────
-            # CFTC publishes weekly COT data as plain text files
-            # We can parse the most recent Traders in Financial Futures report
+            # ── Ultimate fallback: CFTC direct annual file ────────────
             try:
-                cftc_url = "https://www.cftc.gov/dea/newcot/FinFutWk.txt"
-                r_cftc = requests.get(cftc_url, timeout=20,
-                                      headers={"User-Agent": "MarketIQ/1.0"})
-                if r_cftc.status_code == 200:
-                    lines = r_cftc.text.strip().split("\n")
-                    # Find S&P 500 line
-                    sp_idx = next((i for i, l in enumerate(lines)
-                                   if "13874A" in l or "E-MINI S&P 500" in l.upper()), None)
-                    if sp_idx is not None:
-                        sp_line = lines[sp_idx]
-                        parts = [p.strip() for p in sp_line.split(",")]
-                        # CFTC format: Name, Code, OI, NonComm Long, NonComm Short, ...
-                        # positions: [0]=name, [1]=code, [2]=OI,
-                        # [3]=dealer_long, [4]=dealer_short, [5]=dealer_spread,
-                        # [6]=asset_long, [7]=asset_short, ...
-                        # Leveraged funds (large specs): typically at positions 9-11
-                        try:
-                            # Try to get Asset Manager Long/Short (positions 6,7)
-                            # or Leveraged Funds (positions 9,10)
-                            if len(parts) >= 11:
-                                long_val  = int(parts[6].replace(" ", ""))
-                                short_val = int(parts[7].replace(" ", ""))
-                                net_val   = long_val - short_val
-                                # Build minimal data structure
-                                import io
+                # CFTC annual file has full year of weekly data
+                import io as _io
+                year = datetime.now().year
+                cftc_urls = [
+                    f"https://www.cftc.gov/files/dea/history/fin_fut_disagg_txt_{year}.zip",
+                    "https://www.cftc.gov/dea/newcot/FinFutWk.txt",  # latest week
+                ]
+                cftc_text = None
+                for cftc_url in cftc_urls:
+                    try:
+                        r_cftc = requests.get(cftc_url, timeout=20,
+                                              headers={"User-Agent": "MarketIQ/1.0"})
+                        if r_cftc.status_code == 200:
+                            raw = r_cftc.content
+                            # Handle zip
+                            if cftc_url.endswith(".zip"):
+                                import zipfile
+                                with zipfile.ZipFile(_io.BytesIO(raw)) as z:
+                                    fname = z.namelist()[0]
+                                    cftc_text = z.read(fname).decode("utf-8", errors="ignore")
+                            else:
+                                cftc_text = r_cftc.text
+                            break
+                    except Exception:
+                        continue
+
+                if cftc_text:
+                    # Parse CSV lines containing 13874A (E-Mini S&P 500)
+                    lines_all = cftc_text.strip().split("\n")
+                    header = lines_all[0]
+                    sp_lines = [l for l in lines_all[1:] if "13874A" in l or "E-MINI S&P 500" in l.upper()]
+
+                    if sp_lines:
+                        # Parse as CSV
+                        import csv
+                        reader_h = list(csv.reader([header]))[0]
+                        records = []
+                        for line in sp_lines[-52:]:  # last 52 weeks
+                            try:
+                                row = list(csv.reader([line]))[0]
+                                records.append(row)
+                            except Exception:
+                                continue
+
+                        if records and reader_h:
+                            # Find date and position columns
+                            date_idx = next((i for i, c in enumerate(reader_h)
+                                             if "date" in c.lower()), 0)
+                            # Asset Manager Long/Short typically in disaggregated format
+                            am_long_idx  = next((i for i, c in enumerate(reader_h)
+                                                 if "asset mgr" in c.lower() and "long" in c.lower()), None)
+                            am_short_idx = next((i for i, c in enumerate(reader_h)
+                                                 if "asset mgr" in c.lower() and "short" in c.lower()), None)
+                            lev_long_idx  = next((i for i, c in enumerate(reader_h)
+                                                  if "lev" in c.lower() and "long" in c.lower()), None)
+                            lev_short_idx = next((i for i, c in enumerate(reader_h)
+                                                  if "lev" in c.lower() and "short" in c.lower()), None)
+
+                            long_idx  = am_long_idx  or lev_long_idx  or 1
+                            short_idx = am_short_idx or lev_short_idx or 2
+
+                            data_rows = []
+                            for rec in records:
+                                try:
+                                    d = rec[date_idx].strip().strip('"')
+                                    l = int(rec[long_idx].strip().replace(",", ""))
+                                    s = int(rec[short_idx].strip().replace(",", ""))
+                                    data_rows.append([d, l, s])
+                                except (IndexError, ValueError):
+                                    continue
+
+                            if data_rows:
                                 data = {
                                     "column_names": ["Date", "Asset_Long", "Asset_Short"],
-                                    "data": [["2026-04-14", long_val, short_val]],
+                                    "data": data_rows,
                                 }
-                                used_dataset = "CFTC-direct-download"
-                        except (ValueError, IndexError):
-                            pass
+                                used_dataset = "CFTC-direct-annual"
             except Exception:
                 pass
 
@@ -3481,7 +3524,7 @@ def fetch_cot_data() -> dict:
                     f"All COT data sources failed. "
                     f"Tried Nasdaq datasets: {dataset_ids}. "
                     f"Also tried CFTC direct download. "
-                    f"Please verify your Nasdaq Data Link API key."
+                    f"Please verify your Nasdaq Data Link API key at data.nasdaq.com"
                 )
         cols = data["column_names"]
         rows = data["data"]
@@ -3493,38 +3536,42 @@ def fetch_cot_data() -> dict:
         df_cot = df_cot.sort_values(date_col)
 
         # ── Find Long/Short columns ───────────────────────────────
-        # Nasdaq Data Link CFTC column names (varies by dataset format):
-        # Long format (_L_ALL): "Lrg. Spec. Long", "Lrg. Spec. Short"
-        # or "Large Speculator Long", "Large Speculator Short"
-        # or "NonComm. Positions Long (All)", "NonComm. Positions Short (All)"
+        # Handles all formats: Nasdaq Data Link CFTC + CFTC direct download
         long_patterns  = [
-            "Lrg. Spec. Long", "Lrg Spec Long", "Large Spec Long",
-            "Large Speculator Long", "NonComm. Positions Long",
-            "Noncommercial Long", "Non-Commercial Long",
-            "Asset Mgr. Longs", "Leveraged Funds Longs",
+            "Asset_Long", "Asset Long",           # our CFTC direct download
+            "Lrg. Spec. Long", "Lrg Spec Long",   # Nasdaq legacy format
+            "Large Spec Long", "Large Speculator Long",
+            "NonComm. Positions Long", "Noncommercial Long",
+            "Non-Commercial Long", "NonCommercial Long",
+            "Asset Mgr. Longs", "Asset Mgr Longs",
+            "Leveraged Funds Longs", "Lev Funds Long",
         ]
         short_patterns = [
-            "Lrg. Spec. Short", "Lrg Spec Short", "Large Spec Short",
-            "Large Speculator Short", "NonComm. Positions Short",
-            "Noncommercial Short", "Non-Commercial Short",
-            "Asset Mgr. Shorts", "Leveraged Funds Shorts",
+            "Asset_Short", "Asset Short",          # our CFTC direct download
+            "Lrg. Spec. Short", "Lrg Spec Short",
+            "Large Spec Short", "Large Speculator Short",
+            "NonComm. Positions Short", "Noncommercial Short",
+            "Non-Commercial Short", "NonCommercial Short",
+            "Asset Mgr. Shorts", "Asset Mgr Shorts",
+            "Leveraged Funds Shorts", "Lev Funds Short",
         ]
 
         long_col  = next((c for c in cols for p in long_patterns
-                          if p.lower() in c.lower()), None)
+                          if p.lower() == c.lower() or p.lower() in c.lower()), None)
         short_col = next((c for c in cols for p in short_patterns
-                          if p.lower() in c.lower()), None)
+                          if p.lower() == c.lower() or p.lower() in c.lower()), None)
 
         if long_col and short_col:
             df_cot["net"] = pd.to_numeric(df_cot[long_col],  errors="coerce") - \
                             pd.to_numeric(df_cot[short_col], errors="coerce")
         else:
-            # Last resort: use 2nd and 3rd numeric columns (typically long, short)
+            # Last resort: use first two numeric columns after date
             num_cols = [c for c in cols if c != date_col]
             numeric_cols = []
             for c in num_cols:
                 try:
-                    if pd.to_numeric(df_cot[c], errors="coerce").notna().sum() > 10:
+                    vals = pd.to_numeric(df_cot[c], errors="coerce")
+                    if vals.notna().sum() >= 1:  # at least 1 valid value
                         numeric_cols.append(c)
                 except Exception:
                     pass
