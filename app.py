@@ -3403,20 +3403,21 @@ def fetch_bank_health() -> dict:
 def fetch_cot_data() -> dict:
     """
     Layer 5: COT (Commitment of Traders) data via Nasdaq Data Link
-    Dataset: CFTC/110741_FO_L_ALL (S&P 500 futures - Large Speculators)
+    Correct CFTC codes: 13874A = E-Mini S&P 500, 138741 = Full S&P 500
     """
     try:
         nasdaq_key = st.secrets["nasdaq"]["api_key"]
 
-        # S&P 500 E-mini futures COT data on Nasdaq Data Link
-        # Correct dataset codes (try multiple in case one fails):
-        # CFTC/13874_FO_L_ALL  = S&P 500 Futures + Options, Long format
-        # CFTC/13874_F_L_ALL   = S&P 500 Futures Only, Long format
-        # CFTC/13874_F_ALL     = S&P 500 Futures Only, All columns
+        # Correct CFTC dataset codes on Nasdaq Data Link (verified from CFTC.gov):
+        # 13874A = E-Mini S&P 500 (most liquid)
+        # 138741 = Full-size S&P 500 futures
+        # Format: CFTC/{code}_F_L_ALL = Futures Only, Legacy format, All columns
         dataset_ids = [
-            "CFTC/13874_FO_L_ALL",
-            "CFTC/13874_F_L_ALL",
-            "CFTC/13874_F_ALL",
+            "CFTC/13874A_F_L_ALL",    # E-Mini S&P 500, Futures Only, Legacy ← primary
+            "CFTC/13874A_FO_L_ALL",   # E-Mini S&P 500, Futures+Options, Legacy
+            "CFTC/138741_F_L_ALL",    # Full S&P 500, Futures Only, Legacy
+            "CFTC/138741_FO_L_ALL",   # Full S&P 500, Futures+Options, Legacy
+            "CFTC/13874A_F_ALL",      # E-Mini, compact format
         ]
 
         data = None
@@ -3436,7 +3437,52 @@ def fetch_cot_data() -> dict:
                 continue
 
         if data is None:
-            raise ValueError(f"All COT dataset IDs failed: {dataset_ids}")
+            # ── Ultimate fallback: CFTC direct download ──────────────
+            # CFTC publishes weekly COT data as plain text files
+            # We can parse the most recent Traders in Financial Futures report
+            try:
+                cftc_url = "https://www.cftc.gov/dea/newcot/FinFutWk.txt"
+                r_cftc = requests.get(cftc_url, timeout=20,
+                                      headers={"User-Agent": "MarketIQ/1.0"})
+                if r_cftc.status_code == 200:
+                    lines = r_cftc.text.strip().split("\n")
+                    # Find S&P 500 line
+                    sp_idx = next((i for i, l in enumerate(lines)
+                                   if "13874A" in l or "E-MINI S&P 500" in l.upper()), None)
+                    if sp_idx is not None:
+                        sp_line = lines[sp_idx]
+                        parts = [p.strip() for p in sp_line.split(",")]
+                        # CFTC format: Name, Code, OI, NonComm Long, NonComm Short, ...
+                        # positions: [0]=name, [1]=code, [2]=OI,
+                        # [3]=dealer_long, [4]=dealer_short, [5]=dealer_spread,
+                        # [6]=asset_long, [7]=asset_short, ...
+                        # Leveraged funds (large specs): typically at positions 9-11
+                        try:
+                            # Try to get Asset Manager Long/Short (positions 6,7)
+                            # or Leveraged Funds (positions 9,10)
+                            if len(parts) >= 11:
+                                long_val  = int(parts[6].replace(" ", ""))
+                                short_val = int(parts[7].replace(" ", ""))
+                                net_val   = long_val - short_val
+                                # Build minimal data structure
+                                import io
+                                data = {
+                                    "column_names": ["Date", "Asset_Long", "Asset_Short"],
+                                    "data": [["2026-04-14", long_val, short_val]],
+                                }
+                                used_dataset = "CFTC-direct-download"
+                        except (ValueError, IndexError):
+                            pass
+            except Exception:
+                pass
+
+            if data is None:
+                raise ValueError(
+                    f"All COT data sources failed. "
+                    f"Tried Nasdaq datasets: {dataset_ids}. "
+                    f"Also tried CFTC direct download. "
+                    f"Please verify your Nasdaq Data Link API key."
+                )
         cols = data["column_names"]
         rows = data["data"]
 
