@@ -3402,230 +3402,154 @@ def fetch_bank_health() -> dict:
 @st.cache_data(ttl=7200, show_spinner=False)
 def fetch_cot_data() -> dict:
     """
-    Layer 5: COT (Commitment of Traders) data via Nasdaq Data Link
-    Correct CFTC codes: 13874A = E-Mini S&P 500, 138741 = Full S&P 500
+    Layer 5: Institutional positioning proxy using yfinance.
+
+    Since CFTC/Nasdaq Data Link COT data is unreliable in Streamlit Cloud,
+    we use a composite of three measurable institutional sentiment proxies:
+
+    1. SPY vs IWM relative strength (large-cap vs small-cap rotation)
+       Institutions prefer large-caps when risk-on → SPY outperforms IWM
+    2. VIX term structure (^VIX3M / ^VIX ratio)
+       Contango (ratio>1) = institutions calm, not hedging aggressively
+    3. Put/Call proxy via UVXY vs SPY inverse correlation
+       UVXY rising = institutions buying protection (bearish)
+
+    Composite index 0-100: >70 = institutions bullish, <40 = bearish
     """
     try:
-        nasdaq_key = st.secrets["nasdaq"]["api_key"]
-
-        # Correct CFTC dataset codes on Nasdaq Data Link (verified from CFTC.gov):
-        # 13874A = E-Mini S&P 500 (most liquid)
-        # 138741 = Full-size S&P 500 futures
-        # Format: CFTC/{code}_F_L_ALL = Futures Only, Legacy format, All columns
-        dataset_ids = [
-            "CFTC/13874A_F_L_ALL",    # E-Mini S&P 500, Futures Only, Legacy ← primary
-            "CFTC/13874A_FO_L_ALL",   # E-Mini S&P 500, Futures+Options, Legacy
-            "CFTC/138741_F_L_ALL",    # Full S&P 500, Futures Only, Legacy
-            "CFTC/138741_FO_L_ALL",   # Full S&P 500, Futures+Options, Legacy
-            "CFTC/13874A_F_ALL",      # E-Mini, compact format
-        ]
-
-        data = None
-        used_dataset = ""
-        for ds_id in dataset_ids:
-            try:
-                url = (
-                    f"https://data.nasdaq.com/api/v3/datasets/{ds_id}.json"
-                    f"?rows=52&api_key={nasdaq_key}"
-                )
-                r = requests.get(url, timeout=15)
-                if r.status_code == 200:
-                    data = r.json()["dataset"]
-                    used_dataset = ds_id
-                    break
-            except Exception:
-                continue
-
-        if data is None:
-            # ── Ultimate fallback: CFTC direct annual file ────────────
-            try:
-                # CFTC annual file has full year of weekly data
-                import io as _io
-                year = datetime.now().year
-                cftc_urls = [
-                    f"https://www.cftc.gov/files/dea/history/fin_fut_disagg_txt_{year}.zip",
-                    "https://www.cftc.gov/dea/newcot/FinFutWk.txt",  # latest week
-                ]
-                cftc_text = None
-                for cftc_url in cftc_urls:
-                    try:
-                        r_cftc = requests.get(cftc_url, timeout=20,
-                                              headers={"User-Agent": "MarketIQ/1.0"})
-                        if r_cftc.status_code == 200:
-                            raw = r_cftc.content
-                            # Handle zip
-                            if cftc_url.endswith(".zip"):
-                                import zipfile
-                                with zipfile.ZipFile(_io.BytesIO(raw)) as z:
-                                    fname = z.namelist()[0]
-                                    cftc_text = z.read(fname).decode("utf-8", errors="ignore")
-                            else:
-                                cftc_text = r_cftc.text
-                            break
-                    except Exception:
-                        continue
-
-                if cftc_text:
-                    # Parse CSV lines containing 13874A (E-Mini S&P 500)
-                    lines_all = cftc_text.strip().split("\n")
-                    header = lines_all[0]
-                    sp_lines = [l for l in lines_all[1:] if "13874A" in l or "E-MINI S&P 500" in l.upper()]
-
-                    if sp_lines:
-                        # Parse as CSV
-                        import csv
-                        reader_h = list(csv.reader([header]))[0]
-                        records = []
-                        for line in sp_lines[-52:]:  # last 52 weeks
-                            try:
-                                row = list(csv.reader([line]))[0]
-                                records.append(row)
-                            except Exception:
-                                continue
-
-                        if records and reader_h:
-                            # Find date and position columns
-                            date_idx = next((i for i, c in enumerate(reader_h)
-                                             if "date" in c.lower()), 0)
-                            # Asset Manager Long/Short typically in disaggregated format
-                            am_long_idx  = next((i for i, c in enumerate(reader_h)
-                                                 if "asset mgr" in c.lower() and "long" in c.lower()), None)
-                            am_short_idx = next((i for i, c in enumerate(reader_h)
-                                                 if "asset mgr" in c.lower() and "short" in c.lower()), None)
-                            lev_long_idx  = next((i for i, c in enumerate(reader_h)
-                                                  if "lev" in c.lower() and "long" in c.lower()), None)
-                            lev_short_idx = next((i for i, c in enumerate(reader_h)
-                                                  if "lev" in c.lower() and "short" in c.lower()), None)
-
-                            long_idx  = am_long_idx  or lev_long_idx  or 1
-                            short_idx = am_short_idx or lev_short_idx or 2
-
-                            data_rows = []
-                            for rec in records:
-                                try:
-                                    d = rec[date_idx].strip().strip('"')
-                                    l = int(rec[long_idx].strip().replace(",", ""))
-                                    s = int(rec[short_idx].strip().replace(",", ""))
-                                    data_rows.append([d, l, s])
-                                except (IndexError, ValueError):
-                                    continue
-
-                            if data_rows:
-                                data = {
-                                    "column_names": ["Date", "Asset_Long", "Asset_Short"],
-                                    "data": data_rows,
-                                }
-                                used_dataset = "CFTC-direct-annual"
-            except Exception:
-                pass
-
-            if data is None:
-                raise ValueError(
-                    f"All COT data sources failed. "
-                    f"Tried Nasdaq datasets: {dataset_ids}. "
-                    f"Also tried CFTC direct download. "
-                    f"Please verify your Nasdaq Data Link API key at data.nasdaq.com"
-                )
-        cols = data["column_names"]
-        rows = data["data"]
-
-        df_cot = pd.DataFrame(rows, columns=cols)
-        # Date column might be named differently
-        date_col = next((c for c in cols if c.lower() == "date"), cols[0])
-        df_cot[date_col] = pd.to_datetime(df_cot[date_col])
-        df_cot = df_cot.sort_values(date_col)
-
-        # ── Find Long/Short columns ───────────────────────────────
-        # Handles all formats: Nasdaq Data Link CFTC + CFTC direct download
-        long_patterns  = [
-            "Asset_Long", "Asset Long",           # our CFTC direct download
-            "Lrg. Spec. Long", "Lrg Spec Long",   # Nasdaq legacy format
-            "Large Spec Long", "Large Speculator Long",
-            "NonComm. Positions Long", "Noncommercial Long",
-            "Non-Commercial Long", "NonCommercial Long",
-            "Asset Mgr. Longs", "Asset Mgr Longs",
-            "Leveraged Funds Longs", "Lev Funds Long",
-        ]
-        short_patterns = [
-            "Asset_Short", "Asset Short",          # our CFTC direct download
-            "Lrg. Spec. Short", "Lrg Spec Short",
-            "Large Spec Short", "Large Speculator Short",
-            "NonComm. Positions Short", "Noncommercial Short",
-            "Non-Commercial Short", "NonCommercial Short",
-            "Asset Mgr. Shorts", "Asset Mgr Shorts",
-            "Leveraged Funds Shorts", "Lev Funds Short",
-        ]
-
-        long_col  = next((c for c in cols for p in long_patterns
-                          if p.lower() == c.lower() or p.lower() in c.lower()), None)
-        short_col = next((c for c in cols for p in short_patterns
-                          if p.lower() == c.lower() or p.lower() in c.lower()), None)
-
-        if long_col and short_col:
-            df_cot["net"] = pd.to_numeric(df_cot[long_col],  errors="coerce") - \
-                            pd.to_numeric(df_cot[short_col], errors="coerce")
+        # ── Fetch data ────────────────────────────────────────────
+        syms = ["SPY", "IWM", "QQQ", "^VIX", "^VIX3M", "UVXY"]
+        df = yf.download(syms, period="1y", interval="1d",
+                         progress=False, auto_adjust=True)
+        if isinstance(df.columns, pd.MultiIndex):
+            closes = df["Close"].dropna(how="all")
         else:
-            # Last resort: use first two numeric columns after date
-            num_cols = [c for c in cols if c != date_col]
-            numeric_cols = []
-            for c in num_cols:
-                try:
-                    vals = pd.to_numeric(df_cot[c], errors="coerce")
-                    if vals.notna().sum() >= 1:  # at least 1 valid value
-                        numeric_cols.append(c)
-                except Exception:
-                    pass
-            if len(numeric_cols) >= 2:
-                df_cot["net"] = pd.to_numeric(df_cot[numeric_cols[0]], errors="coerce") - \
-                                pd.to_numeric(df_cot[numeric_cols[1]], errors="coerce")
-            else:
-                raise ValueError(
-                    f"Cannot find Long/Short columns. Available: {cols[:10]}"
-                )
+            closes = df[["Close"]].dropna()
 
-        net_series = df_cot["net"].dropna()
-        cur_net    = float(net_series.iloc[-1])
-        prev_net   = float(net_series.iloc[-2])
-        net_min_52 = float(net_series.min())
-        net_max_52 = float(net_series.max())
+        def get_series(sym):
+            if sym in closes.columns:
+                s = closes[sym].dropna()
+                if isinstance(s, pd.DataFrame): s = s.iloc[:,0]
+                return s
+            return None
 
-        # COT Index (0-100): where is current net vs 52-week range
-        cot_range = net_max_52 - net_min_52
-        cot_index = int((cur_net - net_min_52) / cot_range * 100) if cot_range != 0 else 50
+        spy  = get_series("SPY")
+        iwm  = get_series("IWM")
+        qqq  = get_series("QQQ")
+        vix  = get_series("^VIX")
+        vix3m= get_series("^VIX3M")
+        uvxy = get_series("UVXY")
 
-        # Sentiment: high COT index = institutions very long = bullish
-        if   cot_index >= 70: status = "green";  label = f"機構大幅看多 {cot_index}/100"
-        elif cot_index >= 40: status = "orange"; label = f"機構中性 {cot_index}/100"
-        else:                 status = "red";    label = f"機構看空 {cot_index}/100"
+        scores = []
+        details = {}
 
-        date_latest = df_cot[date_col].iloc[-1].strftime("%Y-%m-%d")
-        net_change  = int(cur_net - prev_net)
+        # ── Indicator 1: SPY/IWM relative strength (52-week z-score) ──
+        if spy is not None and iwm is not None and len(spy) >= 52:
+            ratio = spy / iwm
+            ratio_z = (float(ratio.iloc[-1]) - float(ratio.rolling(52).mean().iloc[-1])) /                       max(float(ratio.rolling(52).std().iloc[-1]), 0.001)
+            # z>0 = SPY outperforming (risk-on), z<0 = IWM outperforming (risk-off)
+            score1 = int(min(100, max(0, 50 + ratio_z * 15)))
+            scores.append(score1)
+            spy_iwm_ratio = round(float(ratio.iloc[-1]), 3)
+            details["spy_iwm"] = {"score": score1, "ratio": spy_iwm_ratio,
+                                  "label": "大型股領漲" if score1 > 55 else "小型股領漲"}
+        else:
+            scores.append(50)
+            details["spy_iwm"] = {"score": 50, "label": "數據不足"}
+
+        # ── Indicator 2: VIX term structure (Contango/Backwardation) ──
+        if vix is not None and vix3m is not None and len(vix) >= 2:
+            vix_cur  = float(vix.iloc[-1])
+            vix3m_cur= float(vix3m.iloc[-1])
+            ts_ratio = vix3m_cur / max(vix_cur, 0.1)
+            # ts_ratio > 1.05 = contango (calm), < 0.95 = backwardation (fear)
+            if   ts_ratio >= 1.10: score2 = 85
+            elif ts_ratio >= 1.05: score2 = 70
+            elif ts_ratio >= 1.00: score2 = 55
+            elif ts_ratio >= 0.95: score2 = 35
+            else:                  score2 = 15
+            scores.append(score2)
+            details["vix_ts"] = {"score": score2, "ratio": round(ts_ratio, 3),
+                                  "vix": round(vix_cur,1), "vix3m": round(vix3m_cur,1),
+                                  "label": "Contango ✅" if ts_ratio >= 1 else "Backwardation ⚠️"}
+        else:
+            scores.append(50)
+            details["vix_ts"] = {"score": 50, "label": "數據不足"}
+
+        # ── Indicator 3: UVXY 1-month momentum (inverse = institutions calm) ──
+        if uvxy is not None and len(uvxy) >= 22:
+            uvxy_1m = (float(uvxy.iloc[-1]) / float(uvxy.iloc[-22]) - 1) * 100
+            # UVXY rising = fear, UVXY falling = calm
+            if   uvxy_1m <= -30: score3 = 90  # UVXY crushed = calm
+            elif uvxy_1m <= -15: score3 = 75
+            elif uvxy_1m <= 0:   score3 = 60
+            elif uvxy_1m <= 20:  score3 = 40
+            elif uvxy_1m <= 50:  score3 = 25
+            else:                score3 = 10  # UVXY surging = fear
+            scores.append(score3)
+            details["uvxy"] = {"score": score3, "1m_ret": round(uvxy_1m, 1),
+                                "label": "市場平靜" if uvxy_1m < 0 else "市場恐慌"}
+        else:
+            scores.append(50)
+            details["uvxy"] = {"score": 50, "label": "數據不足"}
+
+        # ── Composite COT Index ───────────────────────────────────
+        # Weighted: VIX term structure most reliable (40%), SPY/IWM (35%), UVXY (25%)
+        weights = [0.35, 0.40, 0.25]
+        cot_index = int(sum(s * w for s, w in zip(scores, weights)))
+        cot_index = max(0, min(100, cot_index))
+
+        # Build 52-week history from SPY/IWM ratio (normalized)
+        history = []
+        if spy is not None and iwm is not None and len(spy) >= 52:
+            ratio_hist = (spy / iwm).tail(52)
+            rh_min = float(ratio_hist.min())
+            rh_max = float(ratio_hist.max())
+            rng = rh_max - rh_min if rh_max != rh_min else 1
+            history = [int((float(v) - rh_min) / rng * 100)
+                       for v in ratio_hist.tolist()]
+
+        if   cot_index >= 70: status = "green";  label = f"機構情緒看多 {cot_index}/100"
+        elif cot_index >= 40: status = "orange"; label = f"機構情緒中性 {cot_index}/100"
+        else:                 status = "red";    label = f"機構情緒看空 {cot_index}/100"
+
+        # Determine latest date
+        date_latest = datetime.now(pytz.timezone("Europe/London")).strftime("%Y-%m-%d")
+        if spy is not None and hasattr(spy.index, 'strftime'):
+            try: date_latest = spy.index[-1].strftime("%Y-%m-%d")
+            except: pass
+
+        sub_labels = " · ".join([
+            details.get("spy_iwm", {}).get("label", ""),
+            details.get("vix_ts", {}).get("label", ""),
+            details.get("uvxy",   {}).get("label", ""),
+        ])
 
         return {
-            "cot_index":    cot_index,
-            "net":          int(cur_net),
-            "net_change":   net_change,
-            "net_min_52":   int(net_min_52),
-            "net_max_52":   int(net_max_52),
-            "status":       status,
-            "label":        label,
-            "date":         date_latest,
-            "history":      [int(v) for v in net_series.tail(26).tolist()],
-            "note":         "大型機構（Large Speculators）S&P500期貨淨多倉，52週指數化",
-            "dataset":      used_dataset,
+            "cot_index":  cot_index,
+            "net":        cot_index,       # reuse field for display
+            "net_change": scores[0] - 50,  # SPY/IWM score delta
+            "net_min_52": 0,
+            "net_max_52": 100,
+            "status":     status,
+            "label":      label,
+            "date":       date_latest,
+            "history":    history,
+            "note":       f"代理指標：大型股/小型股比率 + VIX期限結構 + UVXY動能",
+            "sub_labels": sub_labels,
+            "details":    details,
+            "dataset":    "yfinance-proxy",
         }
+
     except Exception as e:
-        err_msg = str(e)[:120]
         return {
             "cot_index": 50, "net": 0, "net_change": 0,
-            "net_min_52": 0, "net_max_52": 0,
-            "status": "orange",
-            "label": f"COT 數據獲取失敗",
-            "date": "N/A",
-            "history": [],
-            "note": "大型機構S&P500期貨淨多倉，52週指數化",
-            "dataset": "unknown",
-            "error": err_msg,
+            "net_min_52": 0, "net_max_52": 100,
+            "status": "orange", "label": "機構情緒數據獲取失敗",
+            "date": "N/A", "history": [],
+            "note": "代理指標：大型股/小型股比率 + VIX期限結構 + UVXY動能",
+            "dataset": "yfinance-proxy",
+            "error": str(e)[:120],
         }
 
 
@@ -3900,12 +3824,14 @@ def tab_macro_dashboard():
 
             f'<div style="background:{th["card2"]};border-radius:9px;padding:12px">'
             f'<div style="color:{th["green"]};font-weight:700;margin-bottom:6px">第五層</div>'
-            f'<div style="color:{th["text1"]};font-weight:600;margin-bottom:4px">COT機構持倉</div>'
+            f'<div style="color:{th["text1"]};font-weight:600;margin-bottom:4px">機構情緒指數</div>'
             f'<div style="color:{th["text2"]};line-height:1.6">'
-            f'CFTC每週公布大型機構S&P500期貨持倉。52週指數化（0-100）。<br>'
-            f'<span style="color:{th["green"]}">看多：指數&gt;70</span><br>'
-            f'<span style="color:{th["orange"]}">中性：40-70</span><br>'
-            f'<span style="color:{th["red"]}">看空：&lt;40</span></div></div>'
+            f'三個代理指標合成：<br>'
+            f'① SPY/IWM比率（大型股vs小型股）35%<br>'
+            f'② VIX期限結構（Contango程度）40%<br>'
+            f'③ UVXY防禦動能（逆向）25%<br>'
+            f'<span style="color:{th["text3"]}">每日 yfinance 更新</span>'
+            f'</div></div>'
 
             f'</div></div>',
             unsafe_allow_html=True,
@@ -4154,6 +4080,26 @@ def tab_macro_dashboard():
 
         # Arc-style gauge using bar
         arc_pct = idx
+        details = s.get("details", {})
+
+        # Build sub-indicator rows
+        sub_rows = ""
+        icons = {"spy_iwm": "📊", "vix_ts": "📈", "uvxy": "🛡️"}
+        names = {"spy_iwm": "大型/小型股比率", "vix_ts": "VIX期限結構", "uvxy": "UVXY防禦指標"}
+        for key in ["spy_iwm", "vix_ts", "uvxy"]:
+            d = details.get(key, {})
+            dscore = d.get("score", 50)
+            dlabel = d.get("label", "—")
+            dc = th["green"] if dscore >= 60 else th["orange"] if dscore >= 40 else th["red"]
+            sub_rows += (
+                f'<div style="display:flex;justify-content:space-between;'
+                f'align-items:center;padding:4px 0;border-bottom:1px solid {th["border2"]}">'
+                f'<span style="font-size:11px;color:{th["text2"]}">'
+                f'{icons.get(key,"")} {names.get(key,key)}</span>'
+                f'<span style="font-size:11px;font-weight:700;color:{dc}">'
+                f'{dscore}/100 · {dlabel}</span>'
+                f'</div>'
+            )
 
         st.markdown(
             f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
@@ -4161,26 +4107,22 @@ def tab_macro_dashboard():
             f'border-top:3px solid {sc}">'
             f'<div style="font-size:10px;color:{th["text3"]};font-weight:600;'
             f'letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">'
-            f'第五層 · COT機構持倉</div>'
+            f'第五層 · 機構情緒指數</div>'
             f'<div style="font-size:42px;font-weight:900;color:{sc};'
             f'font-family:Inter;letter-spacing:-2px;margin-bottom:4px">'
             f'{idx}<span style="font-size:14px;font-weight:400">/100</span></div>'
             f'<div style="font-size:12px;font-weight:600;color:{sc};margin-bottom:10px">'
             f'{s.get("label","")}</div>'
-            f'<div style="height:8px;background:{th["bg2"]};border-radius:4px;'
+            f'<div style="height:6px;background:{th["bg2"]};border-radius:3px;'
             f'overflow:hidden;margin-bottom:8px">'
             f'<div style="width:{arc_pct}%;height:100%;background:{sc};'
-            f'border-radius:4px"></div></div>'
+            f'border-radius:3px"></div></div>'
             f'<div style="display:flex;justify-content:space-between;'
             f'font-size:10px;color:{th["text3"]};margin-bottom:10px">'
             f'<span>看空 0</span><span>中性 50</span><span>看多 100</span></div>'
-            f'<div style="font-size:11px;color:{th["text2"]};line-height:1.6">'
-            f'淨多倉：{s.get("net",0):,}（'
-            f'{"+" if s.get("net_change",0)>=0 else ""}{s.get("net_change",0):,} 週變化）<br>'
-            f'52週範圍：{s.get("net_min_52",0):,} ~ {s.get("net_max_52",0):,}</div>'
-            f'<div style="font-size:10px;color:{th["text3"]};margin-top:8px">'
-            f'CFTC每週五更新 · 數據至 {s.get("date","N/A")}<br>'
-            f'Dataset: {s.get("dataset","N/A")}<br>'
+            f'{sub_rows}'
+            f'<div style="font-size:10px;color:{th["text3"]};margin-top:8px;line-height:1.6">'
+            f'數據至 {s.get("date","N/A")} · yfinance 每日更新<br>'
             f'{s.get("note","")}'
             + (f'<br><span style="color:{th["red"]}">{s["error"]}</span>' if s.get("error") else "")
             + f'</div>'
