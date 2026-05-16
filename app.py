@@ -364,17 +364,24 @@ def inject_css():
     #MainMenu, footer, header {{ visibility: hidden; }}
     .stDeployButton {{ display: none; }}
 
-    /* ── Hide Streamlit Cloud "Manage app" toolbar ── */
-    [data-testid="stToolbar"] {{ display: none !important; }}
-    [data-testid="stToolbarActions"] {{ display: none !important; }}
+    /* ── Hide Streamlit Cloud "Manage app" toolbar — nuclear option ── */
+    /* Target by data-testid (most reliable) */
+    [data-testid="stToolbar"] {{ display: none !important; visibility: hidden !important; }}
+    [data-testid="stToolbarActions"] {{ display: none !important; visibility: hidden !important; }}
+    [data-testid="manage-app-button"] {{ display: none !important; visibility: hidden !important; }}
+    [data-testid="stBottom"] {{ display: none !important; visibility: hidden !important; }}
+    /* Target by class pattern (catches all Streamlit versions) */
     .stToolbar {{ display: none !important; }}
     #stToolbar {{ display: none !important; }}
-    /* The bottom-right floating bar */
     [class*="viewerBadge"] {{ display: none !important; }}
-    [data-testid="manage-app-button"] {{ display: none !important; }}
-    /* Streamlit Cloud bottom bar (contains Manage app) */
+    [class*="toolbar"] {{ display: none !important; }}
+    [class*="Toolbar"] {{ display: none !important; }}
+    /* Target the fixed bottom-right container */
     .st-emotion-cache-zq5wmm {{ display: none !important; }}
-    footer[data-testid="stFooter"] {{ display: none !important; }}
+    .st-emotion-cache-15hul6a {{ display: none !important; }}
+    .st-emotion-cache-1dp5vir {{ display: none !important; }}
+    /* Catch-all: any fixed positioned element in bottom-right corner */
+    div[style*="position: fixed"][style*="bottom"][style*="right"] {{ display: none !important; }}
 
     /* ── Fix expander _arrow overlap bug (all Streamlit versions) ── */
     .streamlit-expanderHeader {{
@@ -902,6 +909,52 @@ def inject_css():
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
+
+    # ── JavaScript: permanently remove Manage app button via MutationObserver ──
+    # CSS alone sometimes fails because Streamlit injects the toolbar after page load.
+    # MutationObserver watches for DOM changes and removes the button every time it appears.
+    st.markdown("""
+    <script>
+    (function() {
+        function removeToolbar() {
+            // Target by data-testid
+            var selectors = [
+                '[data-testid="stToolbar"]',
+                '[data-testid="stToolbarActions"]',
+                '[data-testid="manage-app-button"]',
+                '[data-testid="stBottom"]',
+                '.stToolbar',
+                '#stToolbar',
+            ];
+            selectors.forEach(function(sel) {
+                var els = document.querySelectorAll(sel);
+                els.forEach(function(el) { el.style.display = 'none'; });
+            });
+            // Also hide by text content "Manage app"
+            var allDivs = document.querySelectorAll('div, button, span');
+            allDivs.forEach(function(el) {
+                if (el.textContent && el.textContent.trim() === 'Manage app') {
+                    var parent = el.closest('[class*="toolbar"], [class*="Toolbar"], [class*="bottom"]');
+                    if (parent) parent.style.display = 'none';
+                    else el.style.display = 'none';
+                }
+            });
+        }
+
+        // Run immediately
+        removeToolbar();
+
+        // Run after DOM ready
+        document.addEventListener('DOMContentLoaded', removeToolbar);
+
+        // Watch for Streamlit dynamically injecting the toolbar later
+        var observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function() { removeToolbar(); });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    })();
+    </script>
+    """, unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
