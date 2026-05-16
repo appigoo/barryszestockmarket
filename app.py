@@ -364,6 +364,18 @@ def inject_css():
     #MainMenu, footer, header {{ visibility: hidden; }}
     .stDeployButton {{ display: none; }}
 
+    /* ── Hide Streamlit Cloud "Manage app" toolbar ── */
+    [data-testid="stToolbar"] {{ display: none !important; }}
+    [data-testid="stToolbarActions"] {{ display: none !important; }}
+    .stToolbar {{ display: none !important; }}
+    #stToolbar {{ display: none !important; }}
+    /* The bottom-right floating bar */
+    [class*="viewerBadge"] {{ display: none !important; }}
+    [data-testid="manage-app-button"] {{ display: none !important; }}
+    /* Streamlit Cloud bottom bar (contains Manage app) */
+    .st-emotion-cache-zq5wmm {{ display: none !important; }}
+    footer[data-testid="stFooter"] {{ display: none !important; }}
+
     /* ── Fix expander _arrow overlap bug (all Streamlit versions) ── */
     .streamlit-expanderHeader {{
         font-size: 14px !important;
@@ -1602,6 +1614,11 @@ def render_login():
 
     /* ── Hide all Streamlit chrome ── */
     #MainMenu, footer, header, .stDeployButton { visibility:hidden; }
+    [data-testid="stToolbar"],
+    [data-testid="stToolbarActions"],
+    [data-testid="manage-app-button"],
+    .stToolbar, [class*="viewerBadge"],
+    .st-emotion-cache-zq5wmm { display: none !important; }
     section[data-testid="stSidebar"],
     button[data-testid="collapsedControl"],
     [data-testid="stSidebarCollapseButton"] {
